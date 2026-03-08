@@ -14,6 +14,11 @@
         userData: null,
         resumeData: null,
         filledFields: [],
+        mutationObserver: null,
+        unloadHandler: null,
+        messageHandler: null,
+        storageChangeHandler: null,
+        initialized: false,
         settings: {
             autoDetect: true,
             showIndicators: true,
@@ -27,25 +32,70 @@
          * Initialize the content script
          */
         async init() {
-            // Listen for messages from popup/background
-            chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+            if (this.initialized) {
+                return;
+            }
+
+            this.initialized = true;
+
+            this.messageHandler = (message, sender, sendResponse) => {
                 if (message.action === 'ping') {
-                    sendResponse({ pong: true });
+                    sendResponse({ pong: true, ready: true });
                     return true;
                 }
+
+                if (message.action === 'refreshRuntimeData') {
+                    this.refreshRuntimeState().then(() => {
+                        sendResponse({ success: true });
+                    }).catch(error => {
+                        sendResponse({
+                            success: false,
+                            error: error.message || 'Failed to refresh runtime state'
+                        });
+                    });
+                    return true;
+                }
+
                 if (message.action === 'triggerAutofill') {
                     this.performAutofill().then(result => {
                         sendResponse(result);
+                    }).catch(error => {
+                        sendResponse({
+                            success: false,
+                            error: error.message || 'Autofill failed'
+                        });
                     });
-                    return true; // Keep channel open for async response
+                    return true;
                 }
+
                 return false;
-            });
+            };
 
-            // Load user data
-            await this.loadUserData();
+            chrome.runtime.onMessage.addListener(this.messageHandler);
 
-            await this.loadSettings();
+            this.storageChangeHandler = (changes, areaName) => {
+                if (areaName !== 'local') {
+                    return;
+                }
+
+                if (changes[StorageKeys.USER_DATA] || changes[StorageKeys.RESUME] || changes[StorageKeys.SETTINGS]) {
+                    this.refreshRuntimeState().catch(error => {
+                        console.error('[JobAutofill] Failed to refresh runtime state after storage update:', error);
+                    });
+                }
+            };
+
+            if (chrome?.storage?.onChanged) {
+                chrome.storage.onChanged.addListener(this.storageChangeHandler);
+            }
+
+            this.unloadHandler = () => {
+                this.cleanup();
+            };
+
+            window.addEventListener('pagehide', this.unloadHandler);
+
+            await this.refreshRuntimeState();
 
             // Add floating button if on a job page
             if (this.settings.autoDetect !== false && this.isLikelyJobPage()) {
@@ -54,6 +104,36 @@
 
             // Set up MutationObserver for dynamic content
             this.observeDynamicContent();
+        },
+
+        async refreshRuntimeState() {
+            await this.loadUserData();
+            await this.loadSettings();
+        },
+
+        cleanup() {
+            if (this.mutationObserver) {
+                this.mutationObserver.disconnect();
+                this.mutationObserver = null;
+            }
+
+            if (this.unloadHandler) {
+                window.removeEventListener('pagehide', this.unloadHandler);
+                this.unloadHandler = null;
+            }
+
+            if (this.messageHandler && chrome?.runtime?.onMessage) {
+                chrome.runtime.onMessage.removeListener(this.messageHandler);
+                this.messageHandler = null;
+            }
+
+            if (this.storageChangeHandler && chrome?.storage?.onChanged) {
+                chrome.storage.onChanged.removeListener(this.storageChangeHandler);
+                this.storageChangeHandler = null;
+            }
+
+            this.initialized = false;
+            window.jobAutofillInitialized = false;
         },
 
         /**
@@ -66,9 +146,9 @@
                     console.warn('[JobAutofill] Chrome storage not available');
                     return;
                 }
-                const result = await chrome.storage.local.get(['jobAutofill_userData', 'jobAutofill_resume']);
-                this.userData = result.jobAutofill_userData || null;
-                this.resumeData = result.jobAutofill_resume || null;
+                const result = await chrome.storage.local.get([StorageKeys.USER_DATA, StorageKeys.RESUME]);
+                this.userData = result[StorageKeys.USER_DATA] || null;
+                this.resumeData = result[StorageKeys.RESUME] || null;
             } catch (error) {
                 // Extension context may have been invalidated - this is normal after reload
                 if (error.message?.includes('Extension context invalidated')) {
@@ -88,8 +168,8 @@
                 if (!chrome?.storage?.local) {
                     return;
                 }
-                const result = await chrome.storage.local.get(['jobAutofill_settings']);
-                this.settings = result.jobAutofill_settings || this.settings;
+                const result = await chrome.storage.local.get([StorageKeys.SETTINGS]);
+                this.settings = result[StorageKeys.SETTINGS] || this.settings;
             } catch (error) {
                 this.settings = this.settings || {
                     autoDetect: true,
@@ -280,6 +360,18 @@
                 };
             }
 
+            if (typeof Validation !== 'undefined') {
+                const validation = Validation.validateUserData(this.userData);
+                if (!validation.valid) {
+                    return {
+                        success: false,
+                        error: validation.errors.join(', ')
+                    };
+                }
+
+                this.userData = validation.normalizedData;
+            }
+
             try {
                 // Check if there's a site autofill feature (like "Autofill from Resume")
                 // and wait for it to complete if it's being used
@@ -321,6 +413,11 @@
 
                 // Handle location autocomplete fields
                 await this.handleLocationAutocomplete();
+
+                // Some sites re-render fields after location or select interactions.
+                const refreshedFields = FieldDetector.detectFields();
+                this.fillTextFields(refreshedFields);
+                this.fillSelectFields(refreshedFields);
 
                 // Handle file upload (only if not already uploaded)
                 await this.handleFileUpload();
@@ -651,6 +748,8 @@
 
             if (!this.isElementAllowed(input)) return false;
 
+            if (input.disabled || input.readOnly) return false;
+
             // Skip if already has value (don't overwrite user input)
             if (input.value && input.value.trim()) return false;
 
@@ -658,28 +757,49 @@
                 // Focus the input
                 input.focus();
 
-                // Set value
-                input.value = value;
+                for (let attempt = 0; attempt < 2; attempt += 1) {
+                    this.setElementValue(input, value);
+                    this.dispatchValueEvents(input);
 
-                // Dispatch events for React/Vue/Angular
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
-                input.dispatchEvent(new Event('blur', { bubbles: true }));
-
-                // For React specifically
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
-                    window.HTMLInputElement.prototype, 'value'
-                )?.set;
-                if (nativeInputValueSetter) {
-                    nativeInputValueSetter.call(input, value);
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    if (this.normalizeText(input.value) === this.normalizeText(value)) {
+                        return true;
+                    }
                 }
 
-                return true;
+                return false;
             } catch (error) {
                 console.error('Failed to fill input:', error);
                 return false;
             }
+        },
+
+        setElementValue(element, value) {
+            const prototype =
+                element instanceof HTMLTextAreaElement ? window.HTMLTextAreaElement.prototype :
+                    element instanceof HTMLSelectElement ? window.HTMLSelectElement.prototype :
+                        window.HTMLInputElement.prototype;
+
+            const nativeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
+
+            if (nativeValueSetter) {
+                nativeValueSetter.call(element, value);
+                return;
+            }
+
+            element.value = value;
+        },
+
+        dispatchValueEvents(element) {
+            element.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+            element.dispatchEvent(new InputEvent('beforeinput', {
+                bubbles: true,
+                cancelable: true,
+                data: typeof element.value === 'string' ? element.value : null,
+                inputType: 'insertText'
+            }));
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            element.dispatchEvent(new Event('blur', { bubbles: true }));
         },
 
         /**
@@ -720,9 +840,20 @@
          */
         selectRadio(radio) {
             if (!this.isElementAllowed(radio)) return false;
+            if (radio.disabled) return false;
+
             radio.checked = true;
             radio.dispatchEvent(new Event('click', { bubbles: true }));
             radio.dispatchEvent(new Event('change', { bubbles: true }));
+
+            if (!radio.checked) {
+                this.clickElement(radio);
+            }
+
+            if (!radio.checked) {
+                return false;
+            }
+
             this.highlightField(radio, true);
             return true;
         },
@@ -1090,13 +1221,9 @@
                 }
 
                 // Dispatch events
-                input.dispatchEvent(new Event('input', { bubbles: true }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
+                this.dispatchValueEvents(input);
                 input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
                 input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
-
-                // Wait for autocomplete dropdown to appear
-                await new Promise(resolve => setTimeout(resolve, 1000));
 
                 // Look for autocomplete suggestions - very broad selector
                 const findSuggestions = () => {
@@ -1126,7 +1253,11 @@
                     });
                 };
 
-                let suggestions = findSuggestions();
+                const suggestions = await this.waitForVisibleElements(findSuggestions, {
+                    timeoutMs: 3000,
+                    intervalMs: 250
+                });
+
                 console.log(`[JobAutofill] Found ${suggestions.length} location suggestions`);
 
                 if (suggestions.length > 0) {
@@ -1225,6 +1356,23 @@
             }
 
             return bestMatch;
+        },
+
+        async waitForVisibleElements(getElements, options = {}) {
+            const timeoutMs = options.timeoutMs || 2000;
+            const intervalMs = options.intervalMs || 200;
+            const startedAt = Date.now();
+
+            while (Date.now() - startedAt < timeoutMs) {
+                const elements = getElements();
+                if (elements.length > 0) {
+                    return elements;
+                }
+
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
+            }
+
+            return getElements();
         },
 
 
@@ -1630,6 +1778,10 @@
 
                 if (!this.isElementAllowed(input)) continue;
 
+                if (input.disabled) {
+                    continue;
+                }
+
                 // Check if it's likely a resume upload using multiple methods
                 const labelText = FieldDetector.getLabelText(input).toLowerCase();
                 const inputName = (input.name || '').toLowerCase();
@@ -1669,6 +1821,10 @@
                         this.resumeData.type
                     );
 
+                    if (!this.canAcceptResumeFile(input, file)) {
+                        continue;
+                    }
+
                     console.log(`[JobAutofill] Created file: ${file.name}, size: ${file.size}`);
 
                     // Create DataTransfer to set files
@@ -1689,6 +1845,11 @@
                     if (nativeInputFileSetter) {
                         nativeInputFileSetter.call(input, dataTransfer.files);
                         input.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+
+                    if (!input.files || input.files.length === 0) {
+                        console.warn('[JobAutofill] File input rejected the attached resume');
+                        continue;
                     }
 
                     // Try triggering click events that might be needed
@@ -1715,8 +1876,17 @@
          * Convert base64 data URL to File object
          */
         base64ToFile(dataUrl, filename, mimeType) {
+            if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.includes(',')) {
+                throw new Error('Stored resume data is invalid');
+            }
+
             const arr = dataUrl.split(',');
             const mime = mimeType || arr[0].match(/:(.*?);/)?.[1] || 'application/pdf';
+
+            if (!arr[1]) {
+                throw new Error('Stored resume payload is empty');
+            }
+
             const bstr = atob(arr[1]);
             let n = bstr.length;
             const u8arr = new Uint8Array(n);
@@ -1726,6 +1896,30 @@
             }
 
             return new File([u8arr], filename, { type: mime });
+        },
+
+        canAcceptResumeFile(input, file) {
+            const accept = (input.accept || '').toLowerCase().trim();
+            if (!accept) {
+                return true;
+            }
+
+            const acceptedTypes = accept.split(',').map(part => part.trim()).filter(Boolean);
+            const fileName = file.name.toLowerCase();
+            const fileType = (file.type || '').toLowerCase();
+
+            return acceptedTypes.some(entry => {
+                if (entry.startsWith('.')) {
+                    return fileName.endsWith(entry);
+                }
+
+                if (entry.endsWith('/*')) {
+                    const prefix = entry.slice(0, -1);
+                    return fileType.startsWith(prefix);
+                }
+
+                return fileType === entry;
+            });
         },
 
         /**
@@ -1776,7 +1970,11 @@
          * Observe DOM for dynamically loaded content
          */
         observeDynamicContent() {
-            const observer = new MutationObserver((mutations) => {
+            if (this.mutationObserver || !document.body) {
+                return;
+            }
+
+            this.mutationObserver = new MutationObserver((mutations) => {
                 let hasNewForms = false;
 
                 for (const mutation of mutations) {
@@ -1797,7 +1995,7 @@
                 }
             });
 
-            observer.observe(document.body, {
+            this.mutationObserver.observe(document.body, {
                 childList: true,
                 subtree: true
             });

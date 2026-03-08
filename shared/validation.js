@@ -3,6 +3,31 @@
  */
 
 const Validation = {
+    normalizeUserData(data) {
+        const source = data || {};
+
+        return {
+            ...source,
+            fullName: (source.fullName || '').trim(),
+            email: (source.email || '').trim(),
+            phone: (source.phone || '').trim(),
+            linkedin: this.normalizeLinkedInUrl(source.linkedin || ''),
+            city: (source.city || '').trim(),
+            state: (source.state || '').trim(),
+            workAuth: (source.workAuth || '').trim(),
+            sponsorship: (source.sponsorship || '').trim(),
+            startAvailability: (source.startAvailability || '').trim(),
+            transgender: (source.transgender || '').trim(),
+            sexualOrientation: (source.sexualOrientation || '').trim(),
+            pronouns: (source.pronouns || '').trim(),
+            gender: (source.gender || '').trim(),
+            race: (source.race || '').trim(),
+            veteran: (source.veteran || '').trim(),
+            disability: (source.disability || '').trim(),
+            hispanicLatino: (source.hispanicLatino || '').trim()
+        };
+    },
+
     /**
      * Validate email format
      * @param {string} email 
@@ -80,31 +105,33 @@ const Validation = {
      * @returns {{valid: boolean, errors: string[]}}
      */
     validateUserData(data) {
+        const normalizedData = this.normalizeUserData(data);
         const errors = [];
 
         // Required fields
-        if (!this.isNotEmpty(data.fullName)) {
+        if (!this.isNotEmpty(normalizedData.fullName)) {
             errors.push('Full name is required');
         }
 
-        if (!this.isNotEmpty(data.email)) {
+        if (!this.isNotEmpty(normalizedData.email)) {
             errors.push('Email is required');
-        } else if (!this.isValidEmail(data.email)) {
+        } else if (!this.isValidEmail(normalizedData.email)) {
             errors.push('Please enter a valid email address');
         }
 
         // Optional but validated fields
-        if (data.linkedin && !this.isValidLinkedInUrl(data.linkedin)) {
+        if (normalizedData.linkedin && !this.isValidLinkedInUrl(normalizedData.linkedin)) {
             errors.push('Please enter a valid LinkedIn profile URL');
         }
 
-        if (data.phone && !this.isValidPhone(data.phone)) {
+        if (normalizedData.phone && !this.isValidPhone(normalizedData.phone)) {
             errors.push('Please enter a valid phone number');
         }
 
         return {
             valid: errors.length === 0,
-            errors
+            errors,
+            normalizedData
         };
     },
 

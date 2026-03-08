@@ -20,8 +20,19 @@ const Storage = {
      * @returns {Promise<void>}
      */
     async saveUserData(data) {
+        const normalizedData = typeof Validation !== 'undefined'
+            ? Validation.normalizeUserData(data)
+            : { ...data };
+
+        if (typeof Validation !== 'undefined') {
+            const validation = Validation.validateUserData(normalizedData);
+            if (!validation.valid) {
+                throw new Error(validation.errors.join(', '));
+            }
+        }
+
         const dataToStore = {
-            ...data,
+            ...normalizedData,
             updatedAt: new Date().toISOString()
         };
 
@@ -37,7 +48,15 @@ const Storage = {
      */
     async getUserData() {
         const result = await chrome.storage.local.get([StorageKeys.USER_DATA]);
-        return result[StorageKeys.USER_DATA] || null;
+        const userData = result[StorageKeys.USER_DATA] || null;
+
+        if (!userData) {
+            return null;
+        }
+
+        return typeof Validation !== 'undefined'
+            ? Validation.normalizeUserData(userData)
+            : userData;
     },
 
     /**
@@ -205,7 +224,16 @@ const Storage = {
      */
     async hasCompletedSetup() {
         const userData = await this.getUserData();
-        return userData !== null && userData.fullName && userData.email;
+
+        if (!userData) {
+            return false;
+        }
+
+        if (typeof Validation === 'undefined') {
+            return Boolean(userData.fullName && userData.email);
+        }
+
+        return Validation.validateUserData(userData).valid;
     }
 };
 

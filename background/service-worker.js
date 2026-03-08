@@ -6,30 +6,89 @@
 /**
  * Inject content scripts into a tab if not already injected
  */
+const CONTENT_SCRIPT_FILES = [
+    'shared/validation.js',
+    'shared/storage.js',
+    'content/fieldDetector.js',
+    'content/content.js'
+];
+
+const CONTENT_SCRIPT_CSS = ['content/content.css'];
+const MESSAGE_TIMEOUT_MS = 1500;
+const INJECTION_RETRY_COUNT = 8;
+const INJECTION_RETRY_DELAY_MS = 150;
+const USER_DATA_STORAGE_KEY = 'jobAutofill_userData';
+
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function sendMessageWithTimeout(tabId, message, timeoutMs = MESSAGE_TIMEOUT_MS) {
+    return await Promise.race([
+        chrome.tabs.sendMessage(tabId, message),
+        new Promise((_, reject) => {
+            setTimeout(() => reject(new Error(`Timed out waiting for ${message.action}`)), timeoutMs);
+        })
+    ]);
+}
+
+async function waitForContentScriptReady(tabId) {
+    for (let attempt = 0; attempt < INJECTION_RETRY_COUNT; attempt += 1) {
+        try {
+            const response = await sendMessageWithTimeout(tabId, { action: 'ping' });
+            if (response?.pong && response?.ready) {
+                return true;
+            }
+        } catch (error) {
+            if (attempt === INJECTION_RETRY_COUNT - 1) {
+                throw error;
+            }
+        }
+
+        await delay(INJECTION_RETRY_DELAY_MS);
+    }
+
+    return false;
+}
+
 async function ensureContentScriptInjected(tabId) {
     try {
-        // Try to ping the content script first
-        await chrome.tabs.sendMessage(tabId, { action: 'ping' });
-        return true; // Content script is already running
+        return await waitForContentScriptReady(tabId);
     } catch (error) {
-        // Content script not running, inject it
         try {
             await chrome.scripting.executeScript({
                 target: { tabId },
-                files: ['shared/validation.js', 'shared/storage.js', 'content/fieldDetector.js', 'content/content.js']
+                files: CONTENT_SCRIPT_FILES
             });
             await chrome.scripting.insertCSS({
                 target: { tabId },
-                files: ['content/content.css']
+                files: CONTENT_SCRIPT_CSS
             });
-            // Wait a bit for scripts to initialize
-            await new Promise(resolve => setTimeout(resolve, 100));
-            return true;
+
+            return await waitForContentScriptReady(tabId);
         } catch (injectError) {
             console.error('Failed to inject content script:', injectError);
             return false;
         }
     }
+}
+
+async function triggerAutofillForTab(tabId) {
+    const injected = await ensureContentScriptInjected(tabId);
+    if (!injected) {
+        return {
+            success: false,
+            error: 'Could not connect to the page. Try refreshing the page.'
+        };
+    }
+
+    try {
+        await sendMessageWithTimeout(tabId, { action: 'refreshRuntimeData' });
+    } catch (error) {
+        console.warn('Failed to refresh content-script runtime state before autofill:', error);
+    }
+
+    return await sendMessageWithTimeout(tabId, { action: 'triggerAutofill' }, 20000);
 }
 
 // Handle keyboard shortcut
@@ -40,14 +99,10 @@ chrome.commands.onCommand.addListener(async (command) => {
 
         if (tab?.id) {
             try {
-                // Ensure content script is injected
-                const injected = await ensureContentScriptInjected(tab.id);
-                if (!injected) {
-                    throw new Error('Could not inject content script');
+                const response = await triggerAutofillForTab(tab.id);
+                if (!response?.success) {
+                    throw new Error(response?.error || 'Autofill failed');
                 }
-
-                // Send message to content script to trigger autofill
-                const response = await chrome.tabs.sendMessage(tab.id, { action: 'triggerAutofill' });
 
                 // Update badge to show action
                 chrome.action.setBadgeText({ text: '✓', tabId: tab.id });
@@ -111,14 +166,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     return;
                 }
 
-                // Ensure content script is injected
-                const injected = await ensureContentScriptInjected(tab.id);
-                if (!injected) {
-                    sendResponse({ success: false, error: 'Could not connect to page. Try refreshing the page.' });
-                    return;
-                }
-
-                const response = await chrome.tabs.sendMessage(tab.id, { action: 'triggerAutofill' });
+                const response = await triggerAutofillForTab(tab.id);
                 sendResponse(response);
             } catch (error) {
                 sendResponse({ success: false, error: error.message || 'Failed to trigger autofill' });
@@ -144,8 +192,8 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         const tab = await chrome.tabs.get(activeInfo.tabId);
         if (isJobSite(tab.url)) {
             // Check if user has completed setup
-            const result = await chrome.storage.local.get(['jobAutofill_userData']);
-            if (result.jobAutofill_userData) {
+            const result = await chrome.storage.local.get([USER_DATA_STORAGE_KEY]);
+            if (result[USER_DATA_STORAGE_KEY]) {
                 chrome.action.setBadgeText({ text: '', tabId: activeInfo.tabId });
             }
         }

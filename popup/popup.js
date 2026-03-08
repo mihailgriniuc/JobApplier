@@ -272,10 +272,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Save user data
     saveBtn.addEventListener('click', async () => {
         try {
+            if (!validateCurrentStep()) {
+                return;
+            }
+
             saveBtn.disabled = true;
             saveBtn.textContent = 'Saving...';
 
-            const userData = {
+            const userData = Validation.normalizeUserData({
                 fullName: document.getElementById('fullName').value.trim(),
                 email: document.getElementById('email').value.trim(),
                 phone: document.getElementById('phone').value.trim(),
@@ -292,9 +296,15 @@ document.addEventListener('DOMContentLoaded', async () => {
                 race: document.getElementById('race').value,
                 veteran: document.getElementById('veteran').value,
                 disability: document.getElementById('disability').value
-            };
+            });
 
-            await Storage.saveUserData(userData);
+            const validation = Validation.validateUserData(userData);
+            if (!validation.valid) {
+                alert(validation.errors.join('\n'));
+                return;
+            }
+
+            await Storage.saveUserData(validation.normalizedData);
 
             if (resumeFile) {
                 await Storage.saveResume(resumeFile);

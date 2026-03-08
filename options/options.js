@@ -203,29 +203,24 @@ document.addEventListener('DOMContentLoaded', async () => {
     saveEditBtn.addEventListener('click', async () => {
         const userData = await Storage.getUserData() || {};
 
-        // Validate
-        const email = document.getElementById('editEmail').value.trim();
-        const linkedin = document.getElementById('editLinkedin').value.trim();
-
-        if (!Validation.isValidEmail(email)) {
-            alert('Please enter a valid email address');
-            return;
-        }
-
-        if (linkedin && !Validation.isValidLinkedInUrl(linkedin)) {
-            alert('Please enter a valid LinkedIn URL');
-            return;
-        }
-
         // Update data
-        userData.fullName = document.getElementById('editFullName').value.trim();
-        userData.email = email;
-        userData.phone = document.getElementById('editPhone').value.trim();
-        userData.linkedin = Validation.normalizeLinkedInUrl(linkedin);
-        userData.city = document.getElementById('editCity').value.trim();
-        userData.state = document.getElementById('editState').value.trim();
+        const updatedUserData = Validation.normalizeUserData({
+            ...userData,
+            fullName: document.getElementById('editFullName').value.trim(),
+            email: document.getElementById('editEmail').value.trim(),
+            phone: document.getElementById('editPhone').value.trim(),
+            linkedin: document.getElementById('editLinkedin').value.trim(),
+            city: document.getElementById('editCity').value.trim(),
+            state: document.getElementById('editState').value.trim()
+        });
 
-        await Storage.saveUserData(userData);
+        const validation = Validation.validateUserData(updatedUserData);
+        if (!validation.valid) {
+            alert(validation.errors.join('\n'));
+            return;
+        }
+
+        await Storage.saveUserData(validation.normalizedData);
         await loadData();
         editModal.classList.add('hidden');
     });
