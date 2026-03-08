@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Guide - Job Application Autofill</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #4c37ff;
+            --primary-hover: #2c1aff;
+            --accent: #ff5db1;
+            --accent-light: #ffd5ea;
+            --success: #00c389;
+            --success-light: #d2fff0;
+            --error: #ff3d3d;
+            --error-light: #ffd6d6;
+            --warning: #ffb703;
+            --warning-light: #fff2c2;
+            --ink: #121212;
+            --canvas: #f6f1ff;
+            --surface: #ffffff;
+            --surface-muted: #fef9e7;
+            --border: #121212;
+            --radius: 10px;
+            --shadow: 4px 4px 0 var(--border);
+            --shadow-lg: 6px 6px 0 var(--border);
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.7;
+            color: var(--ink);
+            background: var(--canvas);
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 700px;
+            margin: 0 auto;
+            background: var(--surface);
+            padding: 40px;
+            border-radius: var(--radius);
+            border: 2px solid var(--border);
+            box-shadow: var(--shadow-lg);
+        }
+
+        h1 {
+            font-size: 28px;
+            margin-bottom: 32px;
+            color: var(--ink);
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+        }
+
+        h2 {
+            font-size: 20px;
+            margin: 32px 0 16px;
+            color: var(--ink);
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+
+        h3 {
+            font-size: 16px;
+            margin: 20px 0 12px;
+            color: var(--ink);
+        }
+
+        p {
+            margin-bottom: 16px;
+            color: var(--ink);
+        }
+
+        ol,
+        ul {
+            margin: 16px 0;
+            padding-left: 24px;
+        }
+
+        li {
+            margin-bottom: 12px;
+            color: var(--ink);
+        }
+
+        code {
+            background: var(--surface-muted);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 13px;
+            border: 2px solid var(--border);
+            box-shadow: var(--shadow);
+        }
+
+        kbd {
+            display: inline-block;
+            padding: 4px 8px;
+            font-size: 12px;
+            font-family: monospace;
+            background: var(--surface);
+            border: 2px solid var(--border);
+            border-radius: 4px;
+            box-shadow: var(--shadow);
+        }
+
+        .tip {
+            background: var(--success-light);
+            border-left: 6px solid var(--success);
+            padding: 16px 20px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+            border: 2px solid var(--border);
+            box-shadow: var(--shadow);
+            margin: 20px 0;
+        }
+
+        .tip strong {
+            color: var(--success);
+        }
+
+        .warning {
+            background: var(--warning-light);
+            border-left: 6px solid var(--warning);
+            padding: 16px 20px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+            border: 2px solid var(--border);
+            box-shadow: var(--shadow);
+            margin: 20px 0;
+        }
+
+        .warning strong {
+            color: var(--warning);
+        }
+
+        .shortcut-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            border: 2px solid var(--border);
+            box-shadow: var(--shadow);
+        }
+
+        .shortcut-table th,
+        .shortcut-table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .shortcut-table th {
+            background: var(--surface-muted);
+            font-weight: 800;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>📋 User Guide</h1>
+
+        <h2>Getting Started</h2>
+
+        <h3>Initial Setup</h3>
+        <ol>
+            <li>Click the extension icon in your Chrome toolbar</li>
+            <li>Read and accept the privacy consent</li>
+            <li>Complete the 4-step setup wizard:
+                <ul>
+                    <li><strong>Step 1:</strong> Enter your personal information</li>
+                    <li><strong>Step 2:</strong> Answer work authorization questions</li>
+                    <li><strong>Step 3:</strong> Provide demographic information (optional)</li>
+                    <li><strong>Step 4:</strong> Upload your resume</li>
+                </ul>
+            </li>
+            <li>Click "Save & Finish" to complete setup</li>
+        </ol>
+
+        <div class="tip">
+            <strong>Tip:</strong> You can update your information anytime by clicking "Edit Info" in the popup or
+            visiting the Options page.
+        </div>
+
+        <h2>Using Autofill</h2>
+
+        <h3>Method 1: Toolbar Button</h3>
+        <ol>
+            <li>Navigate to a job application page</li>
+            <li>Click the extension icon in your toolbar</li>
+            <li>Click "Fill Application Form"</li>
+        </ol>
+
+        <h3>Method 2: On-Page Button</h3>
+        <p>When you visit a job application page, a floating "Autofill" button appears in the bottom-right corner. Click
+            it to fill the form.</p>
+
+        <h3>Method 3: Keyboard Shortcut</h3>
+        <table class="shortcut-table">
+            <tr>
+                <th>Platform</th>
+                <th>Shortcut</th>
+            </tr>
+            <tr>
+                <td>Mac</td>
+                <td><kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></td>
+            </tr>
+            <tr>
+                <td>Windows/Linux</td>
+                <td><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></td>
+            </tr>
+        </table>
+
+        <h2>Supported Job Sites</h2>
+        <p>The extension automatically activates on major job platforms:</p>
+        <ul>
+            <li>LinkedIn Jobs</li>
+            <li>Indeed</li>
+            <li>Glassdoor</li>
+            <li>Lever (jobs.lever.co)</li>
+            <li>Greenhouse (boards.greenhouse.io)</li>
+            <li>Workday</li>
+            <li>ZipRecruiter</li>
+            <li>Monster</li>
+            <li>And many more...</li>
+        </ul>
+        <p>It also works on company career pages that contain "careers", "jobs", or "apply" in the URL.</p>
+
+        <h2>Managing Your Data</h2>
+
+        <h3>View & Edit Data</h3>
+        <ol>
+            <li>Click "View Data" in the popup, or</li>
+            <li>Right-click the extension icon → Options</li>
+        </ol>
+
+        <h3>Export Data</h3>
+        <ol>
+            <li>Go to Options → Import/Export tab</li>
+            <li>Click "Export to JSON"</li>
+            <li>Save the file to backup your data</li>
+        </ol>
+
+        <h3>Import Data</h3>
+        <ol>
+            <li>Go to Options → Import/Export tab</li>
+            <li>Drag and drop a previously exported JSON file</li>
+        </ol>
+
+        <h3>Delete All Data</h3>
+        <ol>
+            <li>Go to Options → Profile Data tab</li>
+            <li>Scroll to "Danger Zone"</li>
+            <li>Click "Delete All Data"</li>
+        </ol>
+
+        <div class="warning">
+            <strong>Warning:</strong> Deleting your data cannot be undone. Export a backup first if you might need your
+            data later.
+        </div>
+
+        <h2>Troubleshooting</h2>
+
+        <h3>Fields not being detected</h3>
+        <ul>
+            <li>Some forms use custom or unusual field naming that may not be recognized</li>
+            <li>Try clicking on the field first to focus it, then use autofill</li>
+            <li>Multi-page forms may need autofill triggered on each page</li>
+        </ul>
+
+        <h3>Resume not uploading</h3>
+        <ul>
+            <li>Ensure your resume is PDF, DOC, or DOCX format</li>
+            <li>File must be under 5MB</li>
+            <li>Some sites may not support automated file uploads</li>
+        </ul>
+
+        <h3>Autofill button not appearing</h3>
+        <ul>
+            <li>The page may not be recognized as a job application</li>
+            <li>Try refreshing the page</li>
+            <li>Use the toolbar icon or keyboard shortcut instead</li>
+        </ul>
+
+        <h2>Privacy & Security</h2>
+        <ul>
+            <li>All data is stored locally on your device</li>
+            <li>No data is ever sent to external servers</li>
+            <li>You control when and where your data is used</li>
+            <li>Delete your data anytime in the Options page</li>
+        </ul>
+
+        <h2>Need Help?</h2>
+        <p>If you encounter any issues or have suggestions, please leave a review on the Chrome Web Store or contact us
+            through the support link.</p>
+    </div>
+</body>
+
+</html>

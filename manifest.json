@@ -1,0 +1,97 @@
+{
+    "manifest_version": 3,
+    "name": "Job Application Autofill",
+    "version": "1.0.0",
+    "description": "Automatically fill job application forms with your saved information",
+    "permissions": [
+        "storage",
+        "activeTab",
+        "scripting"
+    ],
+    "action": {
+        "default_popup": "popup/popup.html",
+        "default_icon": {
+            "16": "icons/icon16.svg",
+            "48": "icons/icon48.svg",
+            "128": "icons/icon128.svg"
+        },
+        "default_title": "Job Application Autofill"
+    },
+    "options_page": "options/options.html",
+    "background": {
+        "service_worker": "background/service-worker.js"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "*://*.linkedin.com/*",
+                "*://*.indeed.com/*",
+                "*://*.glassdoor.com/*",
+                "*://*.lever.co/*",
+                "*://*.greenhouse.io/*",
+                "*://*.workday.com/*",
+                "*://*.myworkdayjobs.com/*",
+                "*://*.icims.com/*",
+                "*://*.taleo.net/*",
+                "*://*.smartrecruiters.com/*",
+                "*://*.jobvite.com/*",
+                "*://*.ultipro.com/*",
+                "*://*.brassring.com/*",
+                "*://*.ziprecruiter.com/*",
+                "*://*.monster.com/*",
+                "*://*.careerbuilder.com/*",
+                "*://*.dice.com/*",
+                "*://*.hired.com/*",
+                "*://*.angel.co/*",
+                "*://*.wellfound.com/*",
+                "*://*.ashbyhq.com/*",
+                "*://*.bamboohr.com/*",
+                "*://*.recruitee.com/*",
+                "*://*.breezy.hr/*",
+                "*://*.jazz.co/*",
+                "*://*.jazzhr.com/*",
+                "*://*.pinpointhq.com/*",
+                "*://*.rippling.com/*",
+                "*://*.applytojob.com/*",
+                "*://*.workable.com/*",
+                "*://*.fountain.com/*",
+                "*://*.hirebridge.com/*",
+                "*://*.paylocity.com/*",
+                "*://*.paycom.com/*",
+                "*://*.adp.com/*",
+                "*://*.successfactors.com/*",
+                "*://*.oraclecloud.com/*",
+                "*://*/*careers*",
+                "*://*/*jobs*",
+                "*://*/*apply*",
+                "*://*/*application*",
+                "*://*/*job-application*",
+                "*://*/*hiring*"
+            ],
+            "js": [
+                "shared/validation.js",
+                "shared/storage.js",
+                "content/fieldDetector.js",
+                "content/content.js"
+            ],
+            "css": [
+                "content/content.css"
+            ],
+            "run_at": "document_idle"
+        }
+    ],
+    "commands": {
+        "trigger-autofill": {
+            "suggested_key": {
+                "default": "Ctrl+Shift+F",
+                "mac": "Command+Shift+F"
+            },
+            "description": "Trigger autofill on current page"
+        }
+    },
+    "icons": {
+        "16": "icons/icon16.svg",
+        "48": "icons/icon48.svg",
+        "128": "icons/icon128.svg"
+    }
+}

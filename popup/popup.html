@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Job Application Autofill</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- Header -->
+    <header class="header">
+      <div class="logo">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M20 6H16V4C16 2.89 15.11 2 14 2H10C8.89 2 8 2.89 8 4V6H4C2.89 6 2 6.89 2 8V19C2 20.11 2.89 21 4 21H20C21.11 21 22 20.11 22 19V8C22 6.89 21.11 6 20 6ZM10 4H14V6H10V4ZM20 19H4V8H20V19Z" fill="currentColor"/>
+          <path d="M13 10H11V13H8V15H11V18H13V15H16V13H13V10Z" fill="currentColor"/>
+        </svg>
+        <span>Job Autofill</span>
+      </div>
+      <button id="settingsBtn" class="icon-btn" title="Settings">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M19.14 12.94C19.18 12.64 19.2 12.33 19.2 12C19.2 11.68 19.18 11.36 19.13 11.06L21.16 9.48C21.34 9.34 21.39 9.07 21.28 8.87L19.36 5.55C19.24 5.33 18.99 5.26 18.77 5.33L16.38 6.29C15.88 5.91 15.35 5.59 14.76 5.35L14.4 2.81C14.36 2.57 14.16 2.4 13.92 2.4H10.08C9.84 2.4 9.65 2.57 9.61 2.81L9.25 5.35C8.66 5.59 8.12 5.92 7.63 6.29L5.24 5.33C5.02 5.25 4.77 5.33 4.65 5.55L2.74 8.87C2.62 9.08 2.66 9.34 2.86 9.48L4.89 11.06C4.84 11.36 4.8 11.69 4.8 12C4.8 12.31 4.82 12.64 4.87 12.94L2.84 14.52C2.66 14.66 2.61 14.93 2.72 15.13L4.64 18.45C4.76 18.67 5.01 18.74 5.23 18.67L7.62 17.71C8.12 18.09 8.65 18.41 9.24 18.65L9.6 21.19C9.65 21.43 9.84 21.6 10.08 21.6H13.92C14.16 21.6 14.36 21.43 14.39 21.19L14.75 18.65C15.34 18.41 15.88 18.09 16.37 17.71L18.76 18.67C18.98 18.75 19.23 18.67 19.35 18.45L21.27 15.13C21.39 14.91 21.34 14.66 21.15 14.52L19.14 12.94ZM12 15.6C10.02 15.6 8.4 13.98 8.4 12C8.4 10.02 10.02 8.4 12 8.4C13.98 8.4 15.6 10.02 15.6 12C15.6 13.98 13.98 15.6 12 15.6Z" fill="currentColor"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- Consent Screen -->
+    <div id="consentScreen" class="screen">
+      <div class="consent-content">
+        <h2>Welcome to Job Autofill</h2>
+        <p>This extension stores your job application information <strong>locally on your device only</strong>. Your data is never transmitted to any external servers.</p>
+        <div class="consent-features">
+          <div class="feature">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1ZM10 17L6 13L7.41 11.59L10 14.17L16.59 7.58L18 9L10 17Z" fill="currentColor"/></svg>
+            <span>100% local storage</span>
+          </div>
+          <div class="feature">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1ZM10 17L6 13L7.41 11.59L10 14.17L16.59 7.58L18 9L10 17Z" fill="currentColor"/></svg>
+            <span>No data transmission</span>
+          </div>
+          <div class="feature">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M12 1L3 5V11C3 16.55 6.84 21.74 12 23C17.16 21.74 21 16.55 21 11V5L12 1ZM10 17L6 13L7.41 11.59L10 14.17L16.59 7.58L18 9L10 17Z" fill="currentColor"/></svg>
+            <span>You control when to fill</span>
+          </div>
+        </div>
+        <label class="checkbox-label">
+          <input type="checkbox" id="consentCheckbox">
+          <span>I understand and agree to store my data locally</span>
+        </label>
+        <button id="consentBtn" class="btn btn-primary" disabled>Get Started</button>
+        <a href="#" id="privacyLink" class="privacy-link">View Privacy Policy</a>
+      </div>
+    </div>
+
+    <!-- Setup Wizard -->
+    <div id="setupScreen" class="screen hidden">
+      <!-- Progress Steps -->
+      <div class="progress-steps">
+        <div class="step active" data-step="1">
+          <div class="step-circle">1</div>
+          <span>Personal</span>
+        </div>
+        <div class="step" data-step="2">
+          <div class="step-circle">2</div>
+          <span>Work Auth</span>
+        </div>
+        <div class="step" data-step="3">
+          <div class="step-circle">3</div>
+          <span>Demographics</span>
+        </div>
+        <div class="step" data-step="4">
+          <div class="step-circle">4</div>
+          <span>Resume</span>
+        </div>
+      </div>
+
+      <!-- Step 1: Personal Information -->
+      <div id="step1" class="step-content active">
+        <h3>Personal Information</h3>
+        
+        <div class="form-group">
+          <label for="fullName">Full Name *</label>
+          <input type="text" id="fullName" placeholder="John Doe" required>
+          <span class="error-text"></span>
+        </div>
+
+        <div class="form-group">
+          <label for="email">Email Address *</label>
+          <input type="email" id="email" placeholder="john.doe@email.com" required>
+          <span class="error-text"></span>
+        </div>
+
+        <div class="form-group">
+          <label for="phone">Phone Number</label>
+          <input type="tel" id="phone" placeholder="(555) 123-4567">
+          <span class="error-text"></span>
+        </div>
+
+        <div class="form-group">
+          <label for="linkedin">LinkedIn Profile URL</label>
+          <input type="url" id="linkedin" placeholder="https://linkedin.com/in/johndoe">
+          <span class="error-text"></span>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="city">City *</label>
+            <input type="text" id="city" placeholder="New York" required>
+          </div>
+          <div class="form-group">
+            <label for="state">State *</label>
+            <input type="text" id="state" placeholder="NY" required>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-primary next-btn" data-next="2">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Work Authorization -->
+      <div id="step2" class="step-content">
+        <h3>Work Authorization</h3>
+
+        <div class="form-group">
+          <label>Are you authorized to work in the United States? *</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="workAuth" value="yes" required>
+              <span>Yes</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="workAuth" value="no">
+              <span>No</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Will you now or in the future require sponsorship for employment visa status? *</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="sponsorship" value="yes" required>
+              <span>Yes</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="sponsorship" value="no">
+              <span>No</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>When would you be able to start? *</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="startAvailability" value="immediately" required>
+              <span>Immediately</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="startAvailability" value="1_week">
+              <span>1 Week</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="startAvailability" value="2_weeks">
+              <span>2 Weeks</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="startAvailability" value="3_weeks">
+              <span>3 Weeks</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="startAvailability" value="4_weeks">
+              <span>4 Weeks</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-secondary prev-btn" data-prev="1">Back</button>
+          <button class="btn btn-primary next-btn" data-next="3">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Demographics (EEOC) -->
+      <div id="step3" class="step-content">
+        <h3>Demographic Information</h3>
+        <p class="info-text">This information is voluntary and used for EEOC compliance purposes only.</p>
+
+        <div class="form-group">
+          <label>Do you identify as transgender?</label>
+          <div class="radio-group">
+            <label class="radio-label">
+              <input type="radio" name="transgender" value="yes">
+              <span>Yes</span>
+            </label>
+            <label class="radio-label">
+              <input type="radio" name="transgender" value="no">
+              <span>No</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="sexualOrientation">Sexual Orientation</label>
+          <select id="sexualOrientation">
+            <option value="">Select...</option>
+            <option value="asexual">Asexual</option>
+            <option value="bisexual">Bisexual</option>
+            <option value="gay">Gay</option>
+            <option value="no_answer">I don't wish to answer</option>
+            <option value="lesbian">Lesbian</option>
+            <option value="lgbtqia">LGBTQIA+ identifying</option>
+            <option value="pansexual">Pansexual</option>
+            <option value="self_describe">Prefer to self-describe as</option>
+            <option value="queer">Queer</option>
+            <option value="questioning">Questioning or unsure</option>
+            <option value="straight">Straight (heterosexual)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="pronouns">Pronouns</label>
+          <select id="pronouns">
+            <option value="">Select...</option>
+            <option value="she_her">she/her/hers</option>
+            <option value="he_him">he/him/his</option>
+            <option value="they_them">they/them/theirs</option>
+            <option value="self_describe">Prefer to self-describe as</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="gender">Gender</label>
+          <select id="gender">
+            <option value="">Select...</option>
+            <option value="male">Male</option>
+            <option value="female">Female</option>
+            <option value="decline">Decline to self-identify</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="race">Race/Ethnicity</label>
+          <select id="race">
+            <option value="">Select...</option>
+            <option value="american_indian">American Indian or Alaska Native</option>
+            <option value="asian">Asian</option>
+            <option value="black">Black or African American</option>
+            <option value="hispanic">Hispanic or Latino</option>
+            <option value="native_hawaiian">Native Hawaiian or Other Pacific Islander</option>
+            <option value="white">White</option>
+            <option value="two_or_more">Two or More Races</option>
+            <option value="decline">Decline to self-identify</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="veteran">Veteran Status</label>
+          <select id="veteran">
+            <option value="">Select...</option>
+            <option value="not_veteran">I am not a protected veteran</option>
+            <option value="disabled_veteran">Disabled Veteran</option>
+            <option value="recently_separated">Recently Separated Veteran</option>
+            <option value="active_wartime">Active Duty Wartime or Campaign Badge Veteran</option>
+            <option value="armed_forces">Armed Forces Service Medal Veteran</option>
+            <option value="decline">Decline to self-identify</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="disability">Disability Status</label>
+          <select id="disability">
+            <option value="">Select...</option>
+            <option value="yes">Yes, I have a disability</option>
+            <option value="no">No, I do not have a disability</option>
+            <option value="decline">Decline to self-identify</option>
+          </select>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-secondary prev-btn" data-prev="2">Back</button>
+          <button class="btn btn-primary next-btn" data-next="4">Continue</button>
+        </div>
+      </div>
+
+      <!-- Step 4: Resume -->
+      <div id="step4" class="step-content">
+        <h3>Resume Upload</h3>
+
+        <div class="file-upload-area" id="dropZone">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2ZM18 20H6V4H13V9H18V20Z" fill="currentColor"/>
+            <path d="M9 13H15V15H9V13ZM9 17H15V19H9V17ZM9 9H11V11H9V9Z" fill="currentColor"/>
+          </svg>
+          <p>Drag & drop your resume here</p>
+          <p class="small">or click to browse</p>
+          <input type="file" id="resumeInput" accept=".pdf,.doc,.docx" hidden>
+          <p class="file-info">Supported: PDF, DOC, DOCX (Max 5MB)</p>
+        </div>
+
+        <div id="filePreview" class="file-preview hidden">
+          <div class="file-icon">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M14 2H6C4.9 2 4 2.9 4 4V20C4 21.1 4.9 22 6 22H18C19.1 22 20 21.1 20 20V8L14 2Z" fill="currentColor"/></svg>
+          </div>
+          <div class="file-details">
+            <span id="fileName"></span>
+            <span id="fileSize"></span>
+          </div>
+          <button id="removeFile" class="icon-btn" title="Remove file">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12L19 6.41Z" fill="currentColor"/></svg>
+          </button>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn btn-secondary prev-btn" data-prev="3">Back</button>
+          <button class="btn btn-primary" id="saveBtn">Save & Finish</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Screen (After Setup) -->
+    <div id="mainScreen" class="screen hidden">
+      <div class="status-card">
+        <div class="status-icon success">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z" fill="currentColor"/></svg>
+        </div>
+        <div class="status-text">
+          <h3>Ready to Autofill</h3>
+          <p id="userGreeting">Hello, User!</p>
+        </div>
+      </div>
+
+      <button id="autofillBtn" class="btn btn-primary btn-large">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M19 3H5C3.89 3 3 3.89 3 5V19C3 20.1 3.89 21 5 21H19C20.1 21 21 20.1 21 19V5C21 3.89 20.1 3 19 3ZM19 19H5V5H19V19Z" fill="currentColor"/><path d="M7 12L10 15L17 8L15.59 6.59L10 12.17L8.41 10.59L7 12Z" fill="currentColor"/></svg>
+        Fill Application Form
+      </button>
+
+      <p class="shortcut-hint">Keyboard shortcut: <kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd></p>
+
+      <div class="quick-actions">
+        <button id="editDataBtn" class="action-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M3 17.25V21H6.75L17.81 9.94L14.06 6.19L3 17.25ZM20.71 7.04C21.1 6.65 21.1 6.02 20.71 5.63L18.37 3.29C17.98 2.9 17.35 2.9 16.96 3.29L15.13 5.12L18.88 8.87L20.71 7.04Z" fill="currentColor"/></svg>
+          Edit Info
+        </button>
+        <button id="viewDataBtn" class="action-btn">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M12 4.5C7 4.5 2.73 7.61 1 12C2.73 16.39 7 19.5 12 19.5C17 19.5 21.27 16.39 23 12C21.27 7.61 17 4.5 12 4.5ZM12 17C9.24 17 7 14.76 7 12C7 9.24 9.24 7 12 7C14.76 7 17 9.24 17 12C17 14.76 14.76 17 12 17ZM12 9C10.34 9 9 10.34 9 12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12C15 10.34 13.66 9 12 9Z" fill="currentColor"/></svg>
+          View Data
+        </button>
+      </div>
+
+      <div id="fillResult" class="fill-result hidden">
+        <div class="result-header">
+          <span id="resultIcon"></span>
+          <span id="resultText"></span>
+        </div>
+        <div id="resultDetails"></div>
+      </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>v1.0.0</span>
+      <a href="#" id="helpLink">Help</a>
+    </footer>
+  </div>
+
+  <script src="../shared/validation.js"></script>
+  <script src="../shared/storage.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

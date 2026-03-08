@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Job Autofill - Settings</title>
+    <link rel="stylesheet" href="options.css">
+</head>
+
+<body>
+    <div class="options-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none">
+                        <path
+                            d="M20 6H16V4C16 2.89 15.11 2 14 2H10C8.89 2 8 2.89 8 4V6H4C2.89 6 2 6.89 2 8V19C2 20.11 2.89 21 4 21H20C21.11 21 22 20.11 22 19V8C22 6.89 21.11 6 20 6ZM10 4H14V6H10V4ZM20 19H4V8H20V19Z"
+                            fill="currentColor" />
+                        <path d="M13 10H11V13H8V15H11V18H13V15H16V13H13V10Z" fill="currentColor" />
+                    </svg>
+                    <div>
+                        <h1>Job Application Autofill</h1>
+                        <p>Manage your saved information</p>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <main class="main-content">
+            <!-- Tabs -->
+            <nav class="tabs">
+                <button class="tab active" data-tab="profile">Profile Data</button>
+                <button class="tab" data-tab="settings">Settings</button>
+                <button class="tab" data-tab="backup">Import/Export</button>
+            </nav>
+
+            <!-- Profile Tab -->
+            <section id="profileTab" class="tab-content active">
+                <div class="section-card">
+                    <div class="section-header">
+                        <h2>Personal Information</h2>
+                        <button id="editPersonalBtn" class="btn btn-secondary btn-sm">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                                <path
+                                    d="M3 17.25V21H6.75L17.81 9.94L14.06 6.19L3 17.25ZM20.71 7.04C21.1 6.65 21.1 6.02 20.71 5.63L18.37 3.29C17.98 2.9 17.35 2.9 16.96 3.29L15.13 5.12L18.88 8.87L20.71 7.04Z"
+                                    fill="currentColor" />
+                            </svg>
+                            Edit
+                        </button>
+                    </div>
+                    <div class="data-grid" id="personalDataGrid">
+                        <div class="data-item">
+                            <span class="data-label">Full Name</span>
+                            <span class="data-value" id="displayFullName">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Email</span>
+                            <span class="data-value" id="displayEmail">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Phone</span>
+                            <span class="data-value" id="displayPhone">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">LinkedIn</span>
+                            <span class="data-value" id="displayLinkedin">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Location</span>
+                            <span class="data-value" id="displayLocation">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h2>Work Authorization</h2>
+                    </div>
+                    <div class="data-grid">
+                        <div class="data-item">
+                            <span class="data-label">Authorized to work in US</span>
+                            <span class="data-value" id="displayWorkAuth">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Requires Sponsorship</span>
+                            <span class="data-value" id="displaySponsorship">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Start Availability</span>
+                            <span class="data-value" id="displayStartAvailability">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h2>Demographic Information</h2>
+                    </div>
+                    <div class="data-grid">
+                        <div class="data-item">
+                            <span class="data-label">Gender</span>
+                            <span class="data-value" id="displayGender">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Race/Ethnicity</span>
+                            <span class="data-value" id="displayRace">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Veteran Status</span>
+                            <span class="data-value" id="displayVeteran">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Disability Status</span>
+                            <span class="data-value" id="displayDisability">-</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <div class="section-header">
+                        <h2>Resume</h2>
+                    </div>
+                    <div id="resumeDisplay" class="resume-display">
+                        <p class="no-data">No resume uploaded</p>
+                    </div>
+                </div>
+
+                <div class="danger-zone">
+                    <h3>Danger Zone</h3>
+                    <p>Permanently delete all your saved data. This action cannot be undone.</p>
+                    <button id="clearDataBtn" class="btn btn-danger">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                            <path
+                                d="M6 19C6 20.1 6.9 21 8 21H16C17.1 21 18 20.1 18 19V7H6V19ZM19 4H15.5L14.5 3H9.5L8.5 4H5V6H19V4Z"
+                                fill="currentColor" />
+                        </svg>
+                        Delete All Data
+                    </button>
+                </div>
+            </section>
+
+            <!-- Settings Tab -->
+            <section id="settingsTab" class="tab-content">
+                <div class="section-card">
+                    <h2>Extension Settings</h2>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <h4>Auto-detect job pages</h4>
+                            <p>Automatically show autofill button on job application pages</p>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="autoDetectToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <h4>Show field indicators</h4>
+                            <p>Highlight fields after filling them</p>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="showIndicatorsToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <h4>Confirm before filling</h4>
+                            <p>Ask for confirmation before filling each form</p>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="confirmFillToggle">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="section-card">
+                    <h2>Keyboard Shortcuts</h2>
+                    <div class="shortcut-info">
+                        <div class="shortcut-item">
+                            <span class="shortcut-keys">
+                                <kbd>⌘</kbd> + <kbd>Shift</kbd> + <kbd>F</kbd>
+                            </span>
+                            <span>Trigger autofill on current page</span>
+                        </div>
+                    </div>
+                    <p class="help-text">To change shortcuts, visit <a href="chrome://extensions/shortcuts"
+                            id="shortcutsLink">Chrome Extension Shortcuts</a></p>
+                </div>
+            </section>
+
+            <!-- Import/Export Tab -->
+            <section id="backupTab" class="tab-content">
+                <div class="section-card">
+                    <h2>Export Data</h2>
+                    <p>Download your saved data as a JSON file. Use this to backup your data or transfer it to another
+                        browser.</p>
+                    <button id="exportBtn" class="btn btn-primary">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+                            <path
+                                d="M19 12V19H5V12H3V19C3 20.1 3.9 21 5 21H19C20.1 21 21 20.1 21 19V12H19ZM13 12.67L15.59 10.09L17 11.5L12 16.5L7 11.5L8.41 10.09L11 12.67V3H13V12.67Z"
+                                fill="currentColor" />
+                        </svg>
+                        Export to JSON
+                    </button>
+                </div>
+
+                <div class="section-card">
+                    <h2>Import Data</h2>
+                    <p>Restore your data from a previously exported JSON file.</p>
+                    <div class="file-upload-area" id="importDropZone">
+                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none">
+                            <path
+                                d="M19.35 10.04C18.67 6.59 15.64 4 12 4C9.11 4 6.6 5.64 5.35 8.04C2.34 8.36 0 10.91 0 14C0 17.31 2.69 20 6 20H19C21.76 20 24 17.76 24 15C24 12.36 21.95 10.22 19.35 10.04ZM14 13V17H10V13H7L12 8L17 13H14Z"
+                                fill="currentColor" />
+                        </svg>
+                        <p>Drop JSON file here or click to browse</p>
+                        <input type="file" id="importInput" accept=".json" hidden>
+                    </div>
+                    <div id="importResult" class="import-result hidden"></div>
+                </div>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-content">
+                <span>Job Application Autofill v1.0.0</span>
+                <div class="footer-links">
+                    <a href="../docs/PRIVACY_POLICY.html">Privacy Policy</a>
+                    <a href="../docs/USER_GUIDE.html">Help</a>
+                </div>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Edit Modal -->
+    <div id="editModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Edit Personal Information</h3>
+                <button id="closeModalBtn" class="icon-btn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <path
+                            d="M19 6.41L17.59 5L12 10.59L6.41 5L5 6.41L10.59 12L5 17.59L6.41 19L12 13.41L17.59 19L19 17.59L13.41 12L19 6.41Z"
+                            fill="currentColor" />
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="editFullName">Full Name</label>
+                    <input type="text" id="editFullName">
+                </div>
+                <div class="form-group">
+                    <label for="editEmail">Email</label>
+                    <input type="email" id="editEmail">
+                </div>
+                <div class="form-group">
+                    <label for="editPhone">Phone</label>
+                    <input type="tel" id="editPhone">
+                </div>
+                <div class="form-group">
+                    <label for="editLinkedin">LinkedIn URL</label>
+                    <input type="url" id="editLinkedin">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editCity">City</label>
+                        <input type="text" id="editCity">
+                    </div>
+                    <div class="form-group">
+                        <label for="editState">State</label>
+                        <input type="text" id="editState">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="cancelEditBtn" class="btn btn-secondary">Cancel</button>
+                <button id="saveEditBtn" class="btn btn-primary">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="../shared/validation.js"></script>
+    <script src="../shared/storage.js"></script>
+    <script src="options.js"></script>
+</body>
+
+</html>
