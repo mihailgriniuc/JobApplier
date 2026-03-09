@@ -16,6 +16,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         location: document.getElementById('displayLocation'),
         workAuth: document.getElementById('displayWorkAuth'),
         sponsorship: document.getElementById('displaySponsorship'),
+        onsiteComfort: document.getElementById('displayOnsiteComfort'),
+        relocationWillingness: document.getElementById('displayRelocationWillingness'),
+        internshipStatus: document.getElementById('displayInternshipStatus'),
+        over18: document.getElementById('displayOver18'),
+        formerEmployee: document.getElementById('displayFormerEmployee'),
         startAvailability: document.getElementById('displayStartAvailability'),
         gender: document.getElementById('displayGender'),
         race: document.getElementById('displayRace'),
@@ -46,6 +51,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Label mappings
     const labelMappings = {
+        yesNo: {
+            yes: 'Yes',
+            no: 'No'
+        },
         gender: {
             male: 'Male',
             female: 'Female',
@@ -118,10 +127,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         displayElements.location.textContent = formatLocation(userData.city, userData.state);
 
         // Display work auth
-        displayElements.workAuth.textContent = userData.workAuth === 'yes' ? 'Yes' :
-            userData.workAuth === 'no' ? 'No' : '-';
-        displayElements.sponsorship.textContent = userData.sponsorship === 'yes' ? 'Yes' :
-            userData.sponsorship === 'no' ? 'No' : '-';
+        displayElements.workAuth.textContent = labelMappings.yesNo[userData.workAuth] || '-';
+        displayElements.sponsorship.textContent = labelMappings.yesNo[userData.sponsorship] || '-';
+        displayElements.onsiteComfort.textContent = labelMappings.yesNo[userData.onsiteComfort] || '-';
+        displayElements.relocationWillingness.textContent = labelMappings.yesNo[userData.relocationWillingness] || '-';
+        displayElements.internshipStatus.textContent = labelMappings.yesNo[userData.internshipStatus] || '-';
+        displayElements.over18.textContent = labelMappings.yesNo[userData.over18] || '-';
+        displayElements.formerEmployee.textContent = labelMappings.yesNo[userData.formerEmployee] || '-';
         displayElements.startAvailability.textContent = labelMappings.startAvailability[userData.startAvailability] || '-';
 
         // Display demographics
@@ -188,6 +200,14 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('editLinkedin').value = userData.linkedin || '';
             document.getElementById('editCity').value = userData.city || '';
             document.getElementById('editState').value = userData.state || '';
+            document.getElementById('editWorkAuth').value = userData.workAuth || '';
+            document.getElementById('editSponsorship').value = userData.sponsorship || '';
+            document.getElementById('editOnsiteComfort').value = userData.onsiteComfort || '';
+            document.getElementById('editRelocationWillingness').value = userData.relocationWillingness || '';
+            document.getElementById('editInternshipStatus').value = userData.internshipStatus || '';
+            document.getElementById('editOver18').value = userData.over18 || '';
+            document.getElementById('editFormerEmployee').value = userData.formerEmployee || '';
+            document.getElementById('editStartAvailability').value = userData.startAvailability || '';
         }
         editModal.classList.remove('hidden');
     });
@@ -211,7 +231,15 @@ document.addEventListener('DOMContentLoaded', async () => {
             phone: document.getElementById('editPhone').value.trim(),
             linkedin: document.getElementById('editLinkedin').value.trim(),
             city: document.getElementById('editCity').value.trim(),
-            state: document.getElementById('editState').value.trim()
+            state: document.getElementById('editState').value.trim(),
+            workAuth: document.getElementById('editWorkAuth').value,
+            sponsorship: document.getElementById('editSponsorship').value,
+            onsiteComfort: document.getElementById('editOnsiteComfort').value,
+            relocationWillingness: document.getElementById('editRelocationWillingness').value,
+            internshipStatus: document.getElementById('editInternshipStatus').value,
+            over18: document.getElementById('editOver18').value,
+            formerEmployee: document.getElementById('editFormerEmployee').value,
+            startAvailability: document.getElementById('editStartAvailability').value
         });
 
         const validation = Validation.validateUserData(updatedUserData);

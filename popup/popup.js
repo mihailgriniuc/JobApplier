@@ -288,6 +288,11 @@ document.addEventListener('DOMContentLoaded', async () => {
                 state: document.getElementById('state').value.trim(),
                 workAuth: document.querySelector('input[name="workAuth"]:checked')?.value || '',
                 sponsorship: document.querySelector('input[name="sponsorship"]:checked')?.value || '',
+                onsiteComfort: document.querySelector('input[name="onsiteComfort"]:checked')?.value || '',
+                relocationWillingness: document.querySelector('input[name="relocationWillingness"]:checked')?.value || '',
+                internshipStatus: document.querySelector('input[name="internshipStatus"]:checked')?.value || '',
+                over18: document.querySelector('input[name="over18"]:checked')?.value || '',
+                formerEmployee: document.querySelector('input[name="formerEmployee"]:checked')?.value || '',
                 startAvailability: document.querySelector('input[name="startAvailability"]:checked')?.value || '',
                 transgender: document.querySelector('input[name="transgender"]:checked')?.value || '',
                 sexualOrientation: document.getElementById('sexualOrientation').value,
@@ -424,6 +429,31 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (userData.sponsorship) {
             const sponsorshipRadio = document.querySelector(`input[name="sponsorship"][value="${userData.sponsorship}"]`);
             if (sponsorshipRadio) sponsorshipRadio.checked = true;
+        }
+
+        if (userData.onsiteComfort) {
+            const onsiteComfortRadio = document.querySelector(`input[name="onsiteComfort"][value="${userData.onsiteComfort}"]`);
+            if (onsiteComfortRadio) onsiteComfortRadio.checked = true;
+        }
+
+        if (userData.relocationWillingness) {
+            const relocationRadio = document.querySelector(`input[name="relocationWillingness"][value="${userData.relocationWillingness}"]`);
+            if (relocationRadio) relocationRadio.checked = true;
+        }
+
+        if (userData.internshipStatus) {
+            const internshipRadio = document.querySelector(`input[name="internshipStatus"][value="${userData.internshipStatus}"]`);
+            if (internshipRadio) internshipRadio.checked = true;
+        }
+
+        if (userData.over18) {
+            const over18Radio = document.querySelector(`input[name="over18"][value="${userData.over18}"]`);
+            if (over18Radio) over18Radio.checked = true;
+        }
+
+        if (userData.formerEmployee) {
+            const formerEmployeeRadio = document.querySelector(`input[name="formerEmployee"][value="${userData.formerEmployee}"]`);
+            if (formerEmployeeRadio) formerEmployeeRadio.checked = true;
         }
 
         if (userData.startAvailability) {

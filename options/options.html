@@ -47,7 +47,7 @@
                                     d="M3 17.25V21H6.75L17.81 9.94L14.06 6.19L3 17.25ZM20.71 7.04C21.1 6.65 21.1 6.02 20.71 5.63L18.37 3.29C17.98 2.9 17.35 2.9 16.96 3.29L15.13 5.12L18.88 8.87L20.71 7.04Z"
                                     fill="currentColor" />
                             </svg>
-                            Edit
+                            Edit Profile
                         </button>
                     </div>
                     <div class="data-grid" id="personalDataGrid">
@@ -86,6 +86,26 @@
                         <div class="data-item">
                             <span class="data-label">Requires Sponsorship</span>
                             <span class="data-value" id="displaySponsorship">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Comfortable With Onsite/Hybrid</span>
+                            <span class="data-value" id="displayOnsiteComfort">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Willing To Relocate</span>
+                            <span class="data-value" id="displayRelocationWillingness">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Intern Or Seeking Internship</span>
+                            <span class="data-value" id="displayInternshipStatus">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">At Least 18 Years Old</span>
+                            <span class="data-value" id="displayOver18">-</span>
+                        </div>
+                        <div class="data-item">
+                            <span class="data-label">Previously Worked Here</span>
+                            <span class="data-value" id="displayFormerEmployee">-</span>
                         </div>
                         <div class="data-item">
                             <span class="data-label">Start Availability</span>
@@ -244,7 +264,7 @@
     <div id="editModal" class="modal hidden">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>Edit Personal Information</h3>
+                <h3>Edit Profile</h3>
                 <button id="closeModalBtn" class="icon-btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                         <path
@@ -279,6 +299,81 @@
                         <label for="editState">State</label>
                         <input type="text" id="editState">
                     </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="editWorkAuth">Authorized to work in the United States</label>
+                    <select id="editWorkAuth">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editSponsorship">Requires sponsorship</label>
+                    <select id="editSponsorship">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editOnsiteComfort">Comfortable with onsite or hybrid work</label>
+                    <select id="editOnsiteComfort">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editRelocationWillingness">Willing to relocate</label>
+                    <select id="editRelocationWillingness">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editInternshipStatus">Currently an intern or seeking an internship</label>
+                    <select id="editInternshipStatus">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editOver18">At least 18 years old</label>
+                    <select id="editOver18">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editFormerEmployee">Previously worked for this company</label>
+                    <select id="editFormerEmployee">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes</option>
+                        <option value="no">No</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editStartAvailability">Start availability</label>
+                    <select id="editStartAvailability">
+                        <option value="">Select...</option>
+                        <option value="immediately">Immediately</option>
+                        <option value="1_week">1 Week</option>
+                        <option value="2_weeks">2 Weeks</option>
+                        <option value="3_weeks">3 Weeks</option>
+                        <option value="4_weeks">4 Weeks</option>
+                    </select>
                 </div>
             </div>
             <div class="modal-footer">

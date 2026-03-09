@@ -806,30 +806,31 @@
          * Fill yes/no radio button fields
          */
         fillYesNoFields() {
-            // Work Authorization
-            if (this.userData.workAuth) {
-                const workAuthRadios = FieldDetector.findYesNoRadios('workAuth');
-                if (workAuthRadios) {
-                    const targetRadio = this.userData.workAuth === 'yes' ?
-                        workAuthRadios.yesRadio : workAuthRadios.noRadio;
-                    if (targetRadio && !targetRadio.checked) {
-                        if (this.selectRadio(targetRadio)) {
-                            this.filledFields.push({ type: 'workAuth', element: targetRadio });
-                        }
-                    }
-                }
-            }
+            const binaryFields = [
+                'workAuth',
+                'sponsorship',
+                'onsiteComfort',
+                'relocationWillingness',
+                'internshipStatus',
+                'over18',
+                'formerEmployee'
+            ];
 
-            // Sponsorship
-            if (this.userData.sponsorship) {
-                const sponsorshipRadios = FieldDetector.findYesNoRadios('sponsorship');
-                if (sponsorshipRadios) {
-                    const targetRadio = this.userData.sponsorship === 'yes' ?
-                        sponsorshipRadios.yesRadio : sponsorshipRadios.noRadio;
-                    if (targetRadio && !targetRadio.checked) {
-                        if (this.selectRadio(targetRadio)) {
-                            this.filledFields.push({ type: 'sponsorship', element: targetRadio });
-                        }
+            for (const fieldType of binaryFields) {
+                const desiredValue = this.userData[fieldType];
+                if (!desiredValue) {
+                    continue;
+                }
+
+                const radios = FieldDetector.findYesNoRadios(fieldType);
+                if (!radios) {
+                    continue;
+                }
+
+                const targetRadio = desiredValue === 'yes' ? radios.yesRadio : radios.noRadio;
+                if (targetRadio && !targetRadio.checked) {
+                    if (this.selectRadio(targetRadio)) {
+                        this.filledFields.push({ type: fieldType, element: targetRadio });
                     }
                 }
             }
@@ -911,79 +912,8 @@
                 const containerText = container.textContent?.toLowerCase() || '';
                 const normalizedContainerText = this.normalizeText(containerText);
 
-                // Determine question type and desired value
-                let fieldType = null;
-                let desiredValue = null;
-
-                // Combined "Authorized without sponsorship" pattern (Priority)
-                // This handles questions like "Are you authorized to work... without sponsorship?"
-                // These are primarily Work Auth questions (Yes = I am authorized), even though they mention sponsorship.
-                const isAuthWithoutSponsorship =
-                    ((normalizedContainerText.includes('authorized') || normalizedContainerText.includes('eligible') || normalizedContainerText.includes('authorization')) &&
-                        normalizedContainerText.includes('without') &&
-                        (normalizedContainerText.includes('sponsorship') || normalizedContainerText.includes('visa'))) ||
-                    normalizedContainerText.includes('unrestricted authorization') ||
-                    normalizedContainerText.includes('unrestricted work authorization');
-
-                // Standard Work Authorization patterns
-                const hasAuthTerm =
-                    normalizedContainerText.includes('authorized') ||
-                    normalizedContainerText.includes('authorization') ||
-                    normalizedContainerText.includes('eligible');
-                const hasWorkTerm = normalizedContainerText.includes('work');
-                const hasUsTerm =
-                    normalizedContainerText.includes('united states') ||
-                    normalizedContainerText.includes('usa') ||
-                    normalizedContainerText.includes('us');
-                const isUsWorkAuthQuestion = hasAuthTerm && hasWorkTerm && hasUsTerm;
-
-                const isWorkAuthQuestion =
-                    normalizedContainerText.includes('authorized to work') ||
-                    normalizedContainerText.includes('legally authorized') ||
-                    normalizedContainerText.includes('eligible to work') ||
-                    normalizedContainerText.includes('work in the u') ||
-                    normalizedContainerText.includes('right to work') ||
-                    normalizedContainerText.includes('authorization to work') ||
-                    normalizedContainerText.includes('lawfully authorized') ||
-                    normalizedContainerText.includes('legally entitled to work') ||
-                    (normalizedContainerText.includes('authorized') && normalizedContainerText.includes('united states')) ||
-                    (normalizedContainerText.includes('eligible') && normalizedContainerText.includes('employment')) ||
-                    isUsWorkAuthQuestion;
-
-                // Sponsorship patterns
-                const isSponsorshipQuestion =
-                    normalizedContainerText.includes('sponsorship') ||
-                    normalizedContainerText.includes('sponsor') ||
-                    normalizedContainerText.includes('will you now or in the future require') ||
-                    normalizedContainerText.includes('require visa') ||
-                    normalizedContainerText.includes('need visa') ||
-                    normalizedContainerText.includes('h 1b') ||
-                    normalizedContainerText.includes('h1b') ||
-                    normalizedContainerText.includes('o 1') ||
-                    normalizedContainerText.includes('o1 visa') ||
-                    normalizedContainerText.includes('tn visa') ||
-                    normalizedContainerText.includes('work visa') ||
-                    normalizedContainerText.includes('employment visa') ||
-                    normalizedContainerText.includes('employment visa status') ||
-                    normalizedContainerText.includes('visa status') ||
-                    normalizedContainerText.includes('visa support') ||
-                    normalizedContainerText.includes('immigration sponsorship') ||
-                    normalizedContainerText.includes('continue working') ||
-                    normalizedContainerText.includes('require sponsorship') ||
-                    (normalizedContainerText.includes('visa') && normalizedContainerText.includes('require')) ||
-                    (normalizedContainerText.includes('visa') && normalizedContainerText.includes('need')) ||
-                    (normalizedContainerText.includes('visa') && normalizedContainerText.includes('future'));
-
-                if (isAuthWithoutSponsorship) {
-                    fieldType = 'workAuth';
-                    desiredValue = this.userData.workAuth;
-                } else if (isSponsorshipQuestion) {
-                    fieldType = 'sponsorship';
-                    desiredValue = this.userData.sponsorship;
-                } else if (isWorkAuthQuestion) {
-                    fieldType = 'workAuth';
-                    desiredValue = this.userData.workAuth;
-                }
+                const fieldType = FieldDetector.classifyBinaryQuestionType(normalizedContainerText);
+                const desiredValue = fieldType ? this.userData[fieldType] : null;
 
                 if (!fieldType || !desiredValue) continue;
 
@@ -1124,6 +1054,26 @@
                 startAvailability: {
                     value: this.userData.startAvailability,
                     patterns: FieldDetector.patterns.startAvailability?.options || {}
+                },
+                onsiteComfort: {
+                    value: this.userData.onsiteComfort,
+                    patterns: FieldDetector.patterns.onsiteComfort?.options || {}
+                },
+                relocationWillingness: {
+                    value: this.userData.relocationWillingness,
+                    patterns: FieldDetector.patterns.relocationWillingness?.options || {}
+                },
+                internshipStatus: {
+                    value: this.userData.internshipStatus,
+                    patterns: FieldDetector.patterns.internshipStatus?.options || {}
+                },
+                over18: {
+                    value: this.userData.over18,
+                    patterns: FieldDetector.patterns.over18?.options || {}
+                },
+                formerEmployee: {
+                    value: this.userData.formerEmployee,
+                    patterns: FieldDetector.patterns.formerEmployee?.options || {}
                 }
             };
 
@@ -1149,6 +1099,11 @@
                         (fieldType === 'race' && (questionText.includes('race') || (questionText.includes('ethnic') && !questionText.includes('hispanic')))) ||
                         (fieldType === 'veteran' && (questionText.includes('veteran') || questionText.includes('military'))) ||
                         (fieldType === 'disability' && questionText.includes('disab')) ||
+                        (fieldType === 'onsiteComfort' && FieldDetector.classifyBinaryQuestionType(questionText) === 'onsiteComfort') ||
+                        (fieldType === 'relocationWillingness' && FieldDetector.classifyBinaryQuestionType(questionText) === 'relocationWillingness') ||
+                        (fieldType === 'internshipStatus' && FieldDetector.classifyBinaryQuestionType(questionText) === 'internshipStatus') ||
+                        (fieldType === 'over18' && FieldDetector.classifyBinaryQuestionType(questionText) === 'over18') ||
+                        (fieldType === 'formerEmployee' && FieldDetector.classifyBinaryQuestionType(questionText) === 'formerEmployee') ||
                         (fieldType === 'startAvailability' && (
                             questionText.includes('when can you start') ||
                             questionText.includes('when would you be able to start') ||
@@ -1391,6 +1346,11 @@
                 disability: { value: this.userData.disability, patterns: FieldDetector.patterns.disability?.options },
                 workAuth: { value: this.userData.workAuth, patterns: FieldDetector.patterns.workAuth?.options },
                 sponsorship: { value: this.userData.sponsorship, patterns: FieldDetector.patterns.sponsorship?.options },
+                onsiteComfort: { value: this.userData.onsiteComfort, patterns: FieldDetector.patterns.onsiteComfort?.options },
+                relocationWillingness: { value: this.userData.relocationWillingness, patterns: FieldDetector.patterns.relocationWillingness?.options },
+                internshipStatus: { value: this.userData.internshipStatus, patterns: FieldDetector.patterns.internshipStatus?.options },
+                over18: { value: this.userData.over18, patterns: FieldDetector.patterns.over18?.options },
+                formerEmployee: { value: this.userData.formerEmployee, patterns: FieldDetector.patterns.formerEmployee?.options },
                 startAvailability: { value: this.userData.startAvailability, patterns: FieldDetector.patterns.startAvailability?.options }
             };
 
@@ -1412,87 +1372,11 @@
                 }
             }
 
-            // Also try to find and fill sponsorship selects that weren't detected
-            this.fillSponsorshipSelects();
-            this.fillWorkAuthSelects();
+            this.fillBinarySelects();
         },
 
-        /**
-         * Find and fill sponsorship select dropdowns specifically
-         */
-        fillSponsorshipSelects() {
-            if (!this.userData.sponsorship) return;
-
+        fillBinarySelects() {
             const allSelects = document.querySelectorAll('select');
-            const sponsorshipPatterns = [
-                'sponsorship', 'sponsor', 'visa', 'immigration', 'will you now',
-                'require', 'continue working',
-                'h-1b', 'h1b', 'work permit', 'employment eligibility'
-            ];
-
-            for (const select of allSelects) {
-                // Skip if already has a value
-                if (select.value && select.selectedIndex > 0) continue;
-
-                if (!this.isElementAllowed(select)) continue;
-
-                // Get surrounding text to check context
-                const labelText = FieldDetector.getLabelText(select).toLowerCase();
-                const parentText = (select.closest('div, fieldset, section')?.textContent || '').toLowerCase();
-                const selectName = (select.name || '').toLowerCase();
-                const selectId = (select.id || '').toLowerCase();
-
-                const allText = `${labelText} ${parentText} ${selectName} ${selectId}`;
-                const isSponsorship = sponsorshipPatterns.some(p => allText.includes(p));
-
-                if (isSponsorship) {
-                    // Find Yes or No option
-                    const options = Array.from(select.options);
-                    const targetValue = this.userData.sponsorship;
-
-                    for (const option of options) {
-                        const optText = option.textContent.toLowerCase().trim();
-                        const optVal = option.value.toLowerCase().trim();
-
-                        if (targetValue === 'yes' && (optText === 'yes' || optVal === 'yes' || optVal === 'true')) {
-                            select.value = option.value;
-                            select.dispatchEvent(new Event('change', { bubbles: true }));
-                            this.filledFields.push({ type: 'sponsorship', element: select });
-                            this.highlightField(select, true);
-                            break;
-                        } else if (targetValue === 'no' && (optText === 'no' || optVal === 'no' || optVal === 'false')) {
-                            select.value = option.value;
-                            select.dispatchEvent(new Event('change', { bubbles: true }));
-                            this.filledFields.push({ type: 'sponsorship', element: select });
-                            this.highlightField(select, true);
-                            break;
-                        }
-                    }
-                }
-            }
-        },
-
-        fillWorkAuthSelects() {
-            if (!this.userData.workAuth) return;
-
-            const allSelects = document.querySelectorAll('select');
-            const workAuthPatterns = [
-                'authorized to work',
-                'work authorization',
-                'legally authorized',
-                'eligible to work',
-                'employment authorization',
-                'right to work',
-                'lawfully authorized',
-                'legally entitled to work',
-                'work in the united states',
-                'work in the us',
-                'work in the usa',
-                'without sponsorship'
-            ];
-
-            const yesPatterns = ['yes', 'authorized', 'eligible', 'true'];
-            const noPatterns = ['no', 'not authorized', 'not eligible', 'false'];
 
             for (const select of allSelects) {
                 if (select.value && select.selectedIndex > 0) continue;
@@ -1505,48 +1389,21 @@
                 const selectId = (select.id || '').toLowerCase();
 
                 const allText = `${labelText} ${parentText} ${selectName} ${selectId}`;
-                const normalizedAllText = this.normalizeText(allText);
+                const fieldType = FieldDetector.classifyBinaryQuestionType(allText);
+                const targetValue = fieldType ? this.userData[fieldType] : null;
+                if (!fieldType || !targetValue) continue;
 
-                const hasAuthTerm =
-                    normalizedAllText.includes('authorized') ||
-                    normalizedAllText.includes('authorization') ||
-                    normalizedAllText.includes('eligible') ||
-                    normalizedAllText.includes('entitled') ||
-                    normalizedAllText.includes('lawfully');
-                const hasWorkTerm = normalizedAllText.includes('work');
-                const hasUsTerm =
-                    normalizedAllText.includes('united states') ||
-                    normalizedAllText.includes('usa') ||
-                    normalizedAllText.includes('us');
+                const option = FieldDetector.findMatchingOption(
+                    select,
+                    targetValue,
+                    FieldDetector.patterns[fieldType]?.options || {}
+                );
 
-                const isWorkAuthQuestion = workAuthPatterns.some(pattern =>
-                    normalizedAllText.includes(this.normalizeText(pattern))
-                ) || (hasAuthTerm && hasWorkTerm && hasUsTerm);
-
-                if (!isWorkAuthQuestion) continue;
-
-                const options = Array.from(select.options);
-                const targetValue = this.userData.workAuth;
-
-                for (const option of options) {
-                    const optText = this.normalizeText(option.textContent || '');
-                    const optVal = this.normalizeText(option.value || '');
-
-                    if (targetValue === 'yes' &&
-                        (yesPatterns.some(p => optText.includes(p)) || yesPatterns.some(p => optVal.includes(p)))) {
-                        select.value = option.value;
-                        select.dispatchEvent(new Event('change', { bubbles: true }));
-                        this.filledFields.push({ type: 'workAuth', element: select });
-                        this.highlightField(select, true);
-                        break;
-                    } else if (targetValue === 'no' &&
-                        (noPatterns.some(p => optText.includes(p)) || noPatterns.some(p => optVal.includes(p)))) {
-                        select.value = option.value;
-                        select.dispatchEvent(new Event('change', { bubbles: true }));
-                        this.filledFields.push({ type: 'workAuth', element: select });
-                        this.highlightField(select, true);
-                        break;
-                    }
+                if (option) {
+                    select.value = option.value;
+                    select.dispatchEvent(new Event('change', { bubbles: true }));
+                    this.filledFields.push({ type: fieldType, element: select });
+                    this.highlightField(select, true);
                 }
             }
         },

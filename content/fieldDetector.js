@@ -83,6 +83,51 @@ const FieldDetector = {
                 '4_weeks': ['4 weeks', 'four weeks', '28 days', '1 month', 'one month']
             }
         },
+        onsiteComfort: {
+            labels: ['comfortable working', 'comfortable commuting', 'comfortable with an onsite', 'comfortable with a hybrid', 'comfortable coming into the office', 'comfortable working for this role', 'comfortable working in', 'in office', 'in-office', 'onsite', 'on-site'],
+            names: ['onsite', 'on_site', 'inoffice', 'in_office', 'hybrid', 'commute'],
+            questions: ['comfortable working', 'comfortable commuting', 'comfortable coming into the office', 'comfortable with an onsite', 'comfortable with a hybrid', '5x a week', '5 days a week', 'five days a week', 'work in office', 'work from office'],
+            options: {
+                yes: ['yes', 'comfortable', 'can commute', 'can work onsite'],
+                no: ['no', 'not comfortable', 'cannot commute', 'cannot work onsite']
+            }
+        },
+        relocationWillingness: {
+            labels: ['willing to relocate', 'open to relocation', 'relocate', 'move to the required location', 'willing to work from the required location'],
+            names: ['relocation', 'relocate', 'willingtorelocate', 'relocationwillingness', 'move_location'],
+            questions: ['willing to relocate', 'open to relocation', 'willing to work from the required location', 'move to the required location', 'relocate for this role', 'able to relocate'],
+            options: {
+                yes: ['yes', 'willing', 'open to relocate'],
+                no: ['no', 'not willing', 'cannot relocate']
+            }
+        },
+        internshipStatus: {
+            labels: ['seeking an internship', 'seeking internship', 'currently employed as an intern', 'internship', 'intern role', 'intern program'],
+            names: ['internship', 'intern', 'internshipstatus', 'seekinginternship', 'currentintern'],
+            questions: ['currently employed as an intern', 'seeking an internship', 'seeking internship', 'interested in an internship', 'internship position', 'intern role'],
+            options: {
+                yes: ['yes', 'intern', 'internship'],
+                no: ['no', 'full time', 'not internship']
+            }
+        },
+        over18: {
+            labels: ['18 years old', '18 or older', 'at least 18', 'over the age of 18', 'legal working age'],
+            names: ['over18', 'age18', 'atleast18', 'legalage'],
+            questions: ['at least 18 years old', '18 years old or older', 'over the age of 18', 'legal working age'],
+            options: {
+                yes: ['yes', '18', 'older'],
+                no: ['no', 'under 18']
+            }
+        },
+        formerEmployee: {
+            labels: ['previously worked for', 'formerly employed by', 'former employee', 'worked for this company', 'worked for us before', 'previous employee'],
+            names: ['formeremployee', 'previousemployee', 'workedherebefore', 'prioremployment', 'rehire'],
+            questions: ['previously worked for this company', 'worked for this company', 'worked for us before', 'formerly employed by', 'former employee', 'past employee'],
+            options: {
+                yes: ['yes', 'former employee', 'previously employed'],
+                no: ['no', 'never employed']
+            }
+        },
         gender: {
             labels: ['gender', 'sex'],
             names: ['gender', 'sex'],
@@ -182,6 +227,133 @@ const FieldDetector = {
             .trim();
     },
 
+    containsNormalizedPhrase(text, pattern) {
+        const normalizedText = this.normalizeText(text);
+        const normalizedPattern = this.normalizeText(pattern);
+
+        if (!normalizedText || !normalizedPattern) {
+            return false;
+        }
+
+        return ` ${normalizedText} `.includes(` ${normalizedPattern} `);
+    },
+
+    classifyBinaryQuestionType(questionText) {
+        const normalizedQuestion = this.normalizeText(questionText);
+        if (!normalizedQuestion) {
+            return null;
+        }
+
+        const isAuthWithoutSponsorship =
+            ((normalizedQuestion.includes('authorized') || normalizedQuestion.includes('eligible') || normalizedQuestion.includes('authorization')) &&
+                normalizedQuestion.includes('without') &&
+                (normalizedQuestion.includes('sponsorship') || normalizedQuestion.includes('visa'))) ||
+            normalizedQuestion.includes('unrestricted authorization') ||
+            normalizedQuestion.includes('unrestricted work authorization');
+
+        const isSponsorshipQuestion =
+            normalizedQuestion.includes('sponsor an immigration case') ||
+            normalizedQuestion.includes('require the company to sponsor') ||
+            normalizedQuestion.includes('require sponsorship') ||
+            normalizedQuestion.includes('need sponsorship') ||
+            normalizedQuestion.includes('visa sponsorship') ||
+            normalizedQuestion.includes('immigration sponsorship') ||
+            normalizedQuestion.includes('employment based immigration case') ||
+            normalizedQuestion.includes('h 1b') ||
+            normalizedQuestion.includes('stem opt') ||
+            normalizedQuestion.includes('work visa') ||
+            normalizedQuestion.includes('employment visa') ||
+            normalizedQuestion.includes('visa status') ||
+            normalizedQuestion.includes('will you now or in the future require');
+
+        const isWorkAuthQuestion =
+            normalizedQuestion.includes('authorized to work') ||
+            normalizedQuestion.includes('legally authorized') ||
+            normalizedQuestion.includes('lawfully in the united states') ||
+            normalizedQuestion.includes('lawfully in the us') ||
+            normalizedQuestion.includes('eligible to work') ||
+            normalizedQuestion.includes('right to work') ||
+            normalizedQuestion.includes('employment authorization') ||
+            normalizedQuestion.includes('authorized to work lawfully');
+
+        const isOnsiteComfortQuestion =
+            normalizedQuestion.includes('comfortable working') ||
+            normalizedQuestion.includes('comfortable commuting') ||
+            normalizedQuestion.includes('comfortable coming into the office') ||
+            normalizedQuestion.includes('comfortable with an onsite') ||
+            normalizedQuestion.includes('comfortable with a hybrid') ||
+            normalizedQuestion.includes('comfortable working for this role') ||
+            normalizedQuestion.includes('5x a week') ||
+            normalizedQuestion.includes('5 days a week') ||
+            normalizedQuestion.includes('five days a week') ||
+            (normalizedQuestion.includes('onsite') && normalizedQuestion.includes('comfortable')) ||
+            (normalizedQuestion.includes('in office') && normalizedQuestion.includes('comfortable'));
+
+        const isRelocationQuestion =
+            normalizedQuestion.includes('willing to relocate') ||
+            normalizedQuestion.includes('open to relocation') ||
+            normalizedQuestion.includes('able to relocate') ||
+            normalizedQuestion.includes('relocate for this role') ||
+            normalizedQuestion.includes('move to the required location') ||
+            normalizedQuestion.includes('willing to work from the required location');
+
+        const isInternshipQuestion =
+            normalizedQuestion.includes('currently employed as an intern') ||
+            normalizedQuestion.includes('seeking an internship') ||
+            normalizedQuestion.includes('seeking internship') ||
+            normalizedQuestion.includes('interested in an internship') ||
+            normalizedQuestion.includes('internship position') ||
+            normalizedQuestion.includes('intern role');
+
+        const isOver18Question =
+            normalizedQuestion.includes('at least 18 years old') ||
+            normalizedQuestion.includes('18 years old or older') ||
+            normalizedQuestion.includes('over the age of 18') ||
+            normalizedQuestion.includes('legal working age');
+
+        const isFormerEmployeeQuestion =
+            normalizedQuestion.includes('previously worked for this company') ||
+            normalizedQuestion.includes('worked for this company') ||
+            normalizedQuestion.includes('worked for us before') ||
+            normalizedQuestion.includes('formerly employed by') ||
+            normalizedQuestion.includes('former employee') ||
+            normalizedQuestion.includes('past employee');
+
+        if (isAuthWithoutSponsorship) {
+            return 'workAuth';
+        }
+
+        if (isSponsorshipQuestion) {
+            return 'sponsorship';
+        }
+
+        if (isWorkAuthQuestion) {
+            return 'workAuth';
+        }
+
+        if (isOnsiteComfortQuestion) {
+            return 'onsiteComfort';
+        }
+
+        if (isRelocationQuestion) {
+            return 'relocationWillingness';
+        }
+
+        if (isInternshipQuestion) {
+            return 'internshipStatus';
+        }
+
+        if (isOver18Question) {
+            return 'over18';
+        }
+
+        if (isFormerEmployeeQuestion) {
+            return 'formerEmployee';
+        }
+
+        return null;
+    },
+
     detectFields() {
         const detectedFields = {};
         const inputs = document.querySelectorAll('input, select, textarea');
@@ -245,7 +417,11 @@ const FieldDetector = {
             // Check labels
             if (patterns.labels) {
                 for (const label of patterns.labels) {
-                    if (labelText.includes(label) || ariaLabel.includes(label) || ariaLabelledBy.includes(label)) {
+                    if (
+                        this.containsNormalizedPhrase(labelText, label) ||
+                        this.containsNormalizedPhrase(ariaLabel, label) ||
+                        this.containsNormalizedPhrase(ariaLabelledBy, label)
+                    ) {
                         return fieldType;
                     }
                 }
@@ -263,7 +439,7 @@ const FieldDetector = {
             // Check placeholders
             if (patterns.placeholders) {
                 for (const ph of patterns.placeholders) {
-                    if (placeholder.includes(ph)) {
+                    if (this.containsNormalizedPhrase(placeholder, ph)) {
                         return fieldType;
                     }
                 }
@@ -272,8 +448,7 @@ const FieldDetector = {
             // Check questions (for work auth, sponsorship)
             if (patterns.questions) {
                 for (const q of patterns.questions) {
-                    const normalizedQuestion = this.normalizeText(q);
-                    if (normalizedAllText.includes(normalizedQuestion)) {
+                    if (this.containsNormalizedPhrase(normalizedAllText, q)) {
                         return fieldType;
                     }
                 }
@@ -378,45 +553,66 @@ const FieldDetector = {
      * @returns {Object} { yesRadio, noRadio }
      */
     findYesNoRadios(fieldType) {
-        const patterns = this.patterns[fieldType];
-        if (!patterns || !patterns.labels) return null;
-
         const allRadios = document.querySelectorAll('input[type="radio"]');
-        let foundGroup = null;
+        const groups = new Map();
 
         for (const radio of allRadios) {
-            const questionText = this.normalizeText(this.getQuestionText(radio));
+            const groupKey = radio.name || this.normalizeText(this.getQuestionText(radio)) || `radio-${groups.size}`;
+            if (!groups.has(groupKey)) {
+                groups.set(groupKey, []);
+            }
+            groups.get(groupKey).push(radio);
+        }
 
-            for (const label of patterns.labels) {
-                const normalizedLabel = this.normalizeText(label);
-                if (questionText.includes(normalizedLabel)) {
-                    // Found a matching question, now find yes/no options
-                    const name = radio.name;
-                    if (!name) continue;
+        for (const radios of groups.values()) {
+            const questionText = radios
+                .map(radio => this.getQuestionText(radio))
+                .find(Boolean) || '';
 
-                    const groupRadios = document.querySelectorAll(`input[name="${name}"]`);
-                    let yesRadio = null;
-                    let noRadio = null;
+            if (this.classifyBinaryQuestionType(questionText) !== fieldType) {
+                continue;
+            }
 
-                    groupRadios.forEach(r => {
-                        const radioLabel = this.getLabelText(r).toLowerCase();
-                        const radioValue = (r.value || '').toLowerCase();
+            let yesRadio = null;
+            let noRadio = null;
 
-                        if (radioLabel.includes('yes') || radioValue === 'yes' || radioValue === 'true') {
-                            yesRadio = r;
-                        } else if (radioLabel.includes('no') || radioValue === 'no' || radioValue === 'false') {
-                            noRadio = r;
-                        }
-                    });
+            for (const radio of radios) {
+                const choiceText = this.normalizeText(this.getChoiceLabelText(radio));
+                const radioValue = this.normalizeText(radio.value || '');
 
-                    if (yesRadio && noRadio) {
-                        return { yesRadio, noRadio };
-                    }
+                if (choiceText === 'yes' || radioValue === 'yes' || radioValue === 'true') {
+                    yesRadio = radio;
+                } else if (choiceText === 'no' || radioValue === 'no' || radioValue === 'false') {
+                    noRadio = radio;
                 }
+            }
+
+            if (yesRadio && noRadio) {
+                return { yesRadio, noRadio };
             }
         }
 
         return null;
+    },
+
+    getChoiceLabelText(input) {
+        const labelledByText = this.getAriaLabelledByText(input);
+        if (labelledByText) {
+            return labelledByText;
+        }
+
+        const labelText = this.getLabelText(input);
+        if (labelText) {
+            return labelText;
+        }
+
+        const siblingText = Array.from(input.parentElement?.childNodes || [])
+            .filter(node => node !== input)
+            .map(node => node.textContent || '')
+            .join(' ')
+            .trim();
+
+        return siblingText || input.value || '';
     },
 
     /**
