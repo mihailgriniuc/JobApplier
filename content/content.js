@@ -54,6 +54,7 @@
         hoverCloseTimer: null,
         floatingButtonResetTimer: null,
         lastStatusSnapshot: null,
+        autofillPromise: null,
 
         resetDebugSession() {
             this.sessionAnswerCache = new Map();
@@ -358,7 +359,7 @@
                     return;
                 }
 
-                if (!event.element && !event.label && !event.question) {
+                if (!event.element && !event.label && !event.question && event.stage !== 'targeted-dropdown') {
                     return;
                 }
 
@@ -372,14 +373,6 @@
                     event.reason === 'already-answered' ||
                     event.reason === 'already-selected' ||
                     event.reason === 'already-has-value'
-                ) {
-                    return;
-                }
-
-                if (
-                    event.stage === 'targeted-dropdown' &&
-                    event.outcome === 'skipped' &&
-                    event.reason === 'no-matching-dropdown-control-found'
                 ) {
                     return;
                 }
@@ -1094,6 +1087,23 @@
          * Main autofill function
          */
         async performAutofill() {
+            if (this.autofillPromise) {
+                this.recordDebugEvent('autofill', 'skipped', {
+                    reason: 'already-running'
+                });
+                return this.autofillPromise;
+            }
+
+            this.autofillPromise = this.runAutofill();
+
+            try {
+                return await this.autofillPromise;
+            } finally {
+                this.autofillPromise = null;
+            }
+        },
+
+        async runAutofill() {
             this.filledFields = [];
             this.allowedFormKeys = null;
             this.resetDebugSession();
@@ -1164,6 +1174,9 @@
                 // Fill select dropdowns
                 this.fillSelectFields(detectedFields);
 
+                // Resolve unmapped native selects/radios/checkboxes before broader custom-control scans.
+                await this.fillAiChoiceFields();
+
                 // Fill custom combobox controls used by Greenhouse and similar forms.
                 await this.fillCustomComboboxFields();
 
@@ -1180,9 +1193,6 @@
 
                 // Handle location autocomplete fields
                 await this.handleLocationAutocomplete();
-
-                // Use AI to resolve unanswered visible select/radio/checkbox choices.
-                await this.fillAiChoiceFields();
 
                 // Some sites re-render fields after location or select interactions.
                 const refreshedReport = FieldDetector.detectFields({ includeDiagnostics: true });
@@ -1772,6 +1782,190 @@
             return this.getStructuredChoiceFieldMappings()[fieldType] || null;
         },
 
+        isStrictStructuredChoiceField(fieldType) {
+            return Boolean(fieldType && this.getStructuredChoiceConfig(fieldType));
+        },
+
+        isStructuredChoiceSelectionSatisfied(control, fieldType) {
+            if (!this.isStrictStructuredChoiceField(fieldType)) {
+                return false;
+            }
+
+            const preferredProfileAnswer = this.getPreferredProfileAnswer(fieldType);
+            if (!preferredProfileAnswer) {
+                return false;
+            }
+
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const visibleValue = root.querySelector('.select__single-value, [class*="single-value"], [class*="valueContainer"] [class*="single"], [data-value]')?.textContent?.trim() || '';
+            const hiddenValues = Array.from(root.querySelectorAll('input[type="hidden"]'))
+                .map(input => input.value?.trim() || '')
+                .filter(Boolean);
+            const currentValues = [
+                visibleValue,
+                this.getCustomComboboxSelectedValue(root),
+                ...hiddenValues,
+                this.getCustomComboboxSelectionText(root)
+            ].filter(Boolean);
+
+            if (currentValues.length === 0) {
+                return false;
+            }
+
+            const patterns = FieldDetector.patterns[fieldType]?.options || {};
+            return currentValues.some(value => {
+                const matched = this.findStructuredChoiceOption([{ text: value, element: root }], fieldType, preferredProfileAnswer, patterns);
+                return Boolean(matched);
+            });
+        },
+
+        shouldFillCustomCombobox(control, fieldTypeOverride = null) {
+            const fieldType = fieldTypeOverride || this.identifyCustomChoiceFieldType(control);
+            if (this.isStrictStructuredChoiceField(fieldType)) {
+                return !this.isStructuredChoiceSelectionSatisfied(control, fieldType);
+            }
+
+            return this.isCustomComboboxUnanswered(control);
+        },
+
+        getTargetedStructuredFieldTypes() {
+            return ['gender', 'hispanicLatino', 'race', 'veteran', 'disability', 'phoneCountryCode'];
+        },
+
+        getTargetedDropdownPauseMs(fieldType) {
+            if (fieldType === 'hispanicLatino') {
+                return 550;
+            }
+
+            if (fieldType === 'race') {
+                return 260;
+            }
+
+            return 180;
+        },
+
+        async waitForDependentStructuredDropdown(fieldType, sourceControl = null) {
+            const config = this.getStructuredChoiceConfig(fieldType);
+            if (!config?.value) {
+                return;
+            }
+
+            await this.waitForVisibleElements(() => {
+                const likelyControls = this.getLikelyStructuredDropdownControls(fieldType);
+                if (likelyControls.length > 0) {
+                    return likelyControls;
+                }
+
+                if (sourceControl) {
+                    return this.getDependentStructuredDropdownControls(sourceControl, fieldType);
+                }
+
+                return [];
+            }, {
+                timeoutMs: 1200,
+                intervalMs: 120
+            });
+        },
+
+        getDependentStructuredDropdownControls(sourceControl, fieldType) {
+            if (!sourceControl || !fieldType) {
+                return [];
+            }
+
+            const controls = this.sortElementsTopToBottom(this.getCustomComboboxElements());
+            const sourceResolvedControl = this.resolveCustomComboboxControl(sourceControl) || sourceControl;
+            const sourceContextRoot = this.getCustomComboboxContextRoot(sourceResolvedControl);
+            const sourceSection = sourceContextRoot?.parentElement || sourceContextRoot;
+            const sourceRect = sourceResolvedControl.getBoundingClientRect();
+            const rankedControls = [];
+
+            for (const control of controls) {
+                const resolvedControl = this.resolveCustomComboboxControl(control) || control;
+                if (resolvedControl === sourceResolvedControl) {
+                    continue;
+                }
+
+                if (!this.isElementAllowed(resolvedControl) || resolvedControl.disabled) {
+                    continue;
+                }
+
+                const relation = sourceResolvedControl.compareDocumentPosition(resolvedControl);
+                if (!(relation & Node.DOCUMENT_POSITION_FOLLOWING)) {
+                    continue;
+                }
+
+                const root = this.getCustomComboboxContextRoot(resolvedControl);
+                const rect = resolvedControl.getBoundingClientRect();
+                const verticalDelta = rect.top - sourceRect.top;
+                if (verticalDelta < -20 || verticalDelta > 900) {
+                    continue;
+                }
+
+                const detectedFieldTypes = this.getCustomComboboxDetectedFieldTypes(resolvedControl);
+                const inferredFieldType = this.identifyCustomChoiceFieldType(resolvedControl);
+                const relatedInput = resolvedControl.matches('input')
+                    ? resolvedControl
+                    : root?.querySelector('input[type="text"], input[type="search"], input[role="combobox"], input[aria-autocomplete="list"], input[type="hidden"], input[name], input[id]');
+                const contextText = this.normalizeText(root?.textContent?.slice(0, 800) || '');
+                const idNameText = this.normalizeText([
+                    resolvedControl.getAttribute('id') || '',
+                    resolvedControl.getAttribute('name') || '',
+                    relatedInput?.getAttribute?.('id') || '',
+                    relatedInput?.getAttribute?.('name') || ''
+                ].join(' '));
+                let score = 0;
+
+                if (root && (root === sourceSection || sourceSection?.contains(root))) {
+                    score += 35;
+                }
+
+                if (inferredFieldType === fieldType) {
+                    score += 150;
+                }
+
+                if (detectedFieldTypes.includes(fieldType)) {
+                    score += 180;
+                }
+
+                if (fieldType === 'race') {
+                    if (contextText.includes('race') || contextText.includes('racial')) score += 120;
+                    if (contextText.includes('ethnicity') || contextText.includes('ethnic')) score += 75;
+                    if (idNameText.includes('race')) score += 140;
+                    if (idNameText.includes('ethnic')) score += 90;
+                    if (this.isCustomComboboxUnanswered(resolvedControl)) score += 25;
+                }
+
+                score += Math.max(0, 40 - Math.floor(Math.max(0, verticalDelta) / 30));
+
+                if (score > 0) {
+                    rankedControls.push({ control: resolvedControl, score });
+                }
+            }
+
+            rankedControls.sort((left, right) => right.score - left.score);
+            return rankedControls.map(item => item.control);
+        },
+
+        getCustomComboboxDetectedFieldTypes(control) {
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const candidates = [
+                root,
+                ...Array.from(root.querySelectorAll('input, button, [role="combobox"], [aria-haspopup="listbox"]'))
+            ].filter(Boolean);
+            const detectedTypes = new Set();
+
+            for (const candidate of candidates) {
+                const result = typeof FieldDetector?.identifyFieldType === 'function'
+                    ? FieldDetector.identifyFieldType(candidate, { includeMeta: true })
+                    : null;
+                if (result?.fieldType) {
+                    detectedTypes.add(result.fieldType);
+                }
+            }
+
+            return Array.from(detectedTypes);
+        },
+
         getPreferredProfileAnswer(fieldType) {
             return this.getStructuredChoiceConfig(fieldType)?.value || null;
         },
@@ -2152,6 +2346,16 @@
                 for (const control of controls) {
                     const inferredFieldType = this.identifyCustomChoiceFieldType(control);
 
+                    if (this.getTargetedStructuredFieldTypes().includes(inferredFieldType)) {
+                        this.recordDebugEvent('custom-combobox', 'skipped', {
+                            fieldType: inferredFieldType,
+                            element: control,
+                            reason: 'reserved-for-targeted-dropdown-pass',
+                            source: 'profile-or-ai'
+                        });
+                        continue;
+                    }
+
                     if (!this.isElementAllowed(control)) {
                         this.recordDebugEvent('custom-combobox', 'skipped', {
                             fieldType: inferredFieldType,
@@ -2172,7 +2376,7 @@
                         continue;
                     }
 
-                    if (!this.isCustomComboboxUnanswered(control)) {
+                    if (!this.shouldFillCustomCombobox(control, inferredFieldType)) {
                         this.recordDebugEvent('custom-combobox', 'skipped', {
                             fieldType: inferredFieldType,
                             element: control,
@@ -2229,18 +2433,45 @@
         },
 
         async fillTargetedStructuredDropdowns() {
-            const fieldTypes = ['gender', 'hispanicLatino', 'veteran', 'disability', 'race', 'phoneCountryCode'];
+            const fieldTypes = this.getTargetedStructuredFieldTypes();
+            const claimedControlIds = new Set();
+            const completedFieldTypes = new Set();
+            const resolvedControlsByFieldType = new Map();
             for (let pass = 0; pass < 3; pass += 1) {
                 let passProgress = false;
 
                 for (const fieldType of fieldTypes) {
+                    if (completedFieldTypes.has(fieldType)) {
+                        continue;
+                    }
+
                     const config = this.getStructuredChoiceConfig(fieldType);
                     if (!config?.value) {
                         continue;
                     }
 
-                    const candidates = this.rankStructuredDropdownControls(fieldType);
+                    let candidates = this.rankStructuredDropdownControls(fieldType);
+                    if (fieldType === 'race' && candidates.length === 0) {
+                        const dependentControls = this.getDependentStructuredDropdownControls(
+                            resolvedControlsByFieldType.get('hispanicLatino'),
+                            fieldType
+                        );
+                        if (dependentControls.length > 0) {
+                            candidates = dependentControls.map((control, index) => ({ control, score: 1000 - index }));
+                        }
+                    }
+
+                    let fallbackControl = null;
                     if (candidates.length === 0) {
+                        fallbackControl = await this.findStructuredDropdownControlByOptions(
+                            fieldType,
+                            fieldType === 'race'
+                                ? this.getDependentStructuredDropdownControls(resolvedControlsByFieldType.get('hispanicLatino'), fieldType)
+                                : []
+                        );
+                    }
+
+                    if (candidates.length === 0 && !fallbackControl) {
                         if (pass === 0) {
                             this.recordDebugEvent('targeted-dropdown', 'skipped', {
                                 fieldType,
@@ -2254,15 +2485,27 @@
                     let resolved = null;
                     let resolvedControl = null;
 
-                    for (const candidate of candidates) {
-                        const control = candidate.control;
-                        if (!this.isCustomComboboxUnanswered(control)) {
+                    const orderedControls = candidates.map(candidate => candidate.control);
+                    if (fallbackControl && !orderedControls.includes(fallbackControl)) {
+                        orderedControls.unshift(fallbackControl);
+                    }
+
+                    for (const control of orderedControls) {
+                        const controlId = this.getCustomComboboxIdentity(control);
+                        if (claimedControlIds.has(controlId)) {
+                            continue;
+                        }
+
+                        if (!this.shouldFillCustomCombobox(control, fieldType)) {
                             continue;
                         }
 
                         resolved = await this.resolveCustomComboboxField(control, fieldType);
                         if (resolved) {
                             resolvedControl = control;
+                            claimedControlIds.add(controlId);
+                            completedFieldTypes.add(fieldType);
+                            resolvedControlsByFieldType.set(fieldType, control);
                             break;
                         }
                     }
@@ -2289,7 +2532,11 @@
                         source: resolved.source || 'profile'
                     });
 
-                    await new Promise(resolve => setTimeout(resolve, 120));
+                    if (fieldType === 'hispanicLatino') {
+                        await this.waitForDependentStructuredDropdown('race', resolvedControl);
+                    }
+
+                    await new Promise(resolve => setTimeout(resolve, this.getTargetedDropdownPauseMs(fieldType)));
                 }
 
                 if (!passProgress) {
@@ -2313,6 +2560,7 @@
 
                 const root = this.getCustomComboboxContextRoot(control);
                 const contextText = this.normalizeText(root?.textContent?.slice(0, 800) || '');
+                const detectedFieldTypes = this.getCustomComboboxDetectedFieldTypes(control);
                 const ariaLabel = this.normalizeText(control.getAttribute('aria-label') || '');
                 const relatedInput = control.matches('input')
                     ? control
@@ -2357,6 +2605,12 @@
                     score -= 55;
                 }
 
+                if (detectedFieldTypes.includes(fieldType)) {
+                    score += 180;
+                } else if (detectedFieldTypes.length > 0) {
+                    score -= 70;
+                }
+
                 if (directFieldType === fieldType) {
                     score += 120;
                 } else if (directFieldType) {
@@ -2389,6 +2643,12 @@
                 if (fieldType !== 'hispanicLatino' && directFieldType === 'hispanicLatino') score -= 60;
                 if (fieldType !== 'veteran' && directFieldType === 'veteran') score -= 60;
                 if (fieldType !== 'disability' && directFieldType === 'disability') score -= 60;
+                if (fieldType !== 'race' && detectedFieldTypes.includes('race')) score -= 80;
+                if (fieldType !== 'hispanicLatino' && detectedFieldTypes.includes('hispanicLatino')) score -= 80;
+                if (fieldType !== 'veteran' && detectedFieldTypes.includes('veteran')) score -= 80;
+                if (fieldType !== 'disability' && detectedFieldTypes.includes('disability')) score -= 80;
+                if (fieldType !== 'gender' && detectedFieldTypes.includes('gender')) score -= 80;
+                if (fieldType !== 'phoneCountryCode' && detectedFieldTypes.includes('phoneCountryCode')) score -= 80;
 
                 if (score > 0) {
                     rankedControls.push({ control, score });
@@ -2397,6 +2657,173 @@
 
             rankedControls.sort((left, right) => right.score - left.score);
             return rankedControls;
+        },
+
+        getLikelyStructuredDropdownControls(fieldType) {
+            const controls = this.sortElementsTopToBottom(this.getCustomComboboxElements());
+            const patterns = FieldDetector.patterns[fieldType] || {};
+            const searchTerms = [
+                ...(patterns.labels || []),
+                ...(patterns.questions || []),
+                ...(patterns.names || [])
+            ].map(term => this.normalizeText(term)).filter(Boolean);
+
+            return controls.filter(control => {
+                if (!this.isElementAllowed(control) || control.disabled) {
+                    return false;
+                }
+
+                const root = this.getCustomComboboxContextRoot(control);
+                const detectedFieldTypes = this.getCustomComboboxDetectedFieldTypes(control);
+                const inferredFieldType = this.identifyCustomChoiceFieldType(control);
+                const relatedInput = control.matches('input')
+                    ? control
+                    : root?.querySelector('input[type="text"], input[type="search"], input[role="combobox"], input[aria-autocomplete="list"], input[type="hidden"], input[name], input[id]');
+                const idNameText = this.normalizeText([
+                    control.getAttribute('id') || '',
+                    control.getAttribute('name') || '',
+                    relatedInput?.getAttribute?.('id') || '',
+                    relatedInput?.getAttribute?.('name') || ''
+                ].join(' '));
+                const contextText = this.normalizeText(root?.textContent?.slice(0, 800) || '');
+                const directFieldType = this.inferStructuredChoiceFieldType(
+                    FieldDetector.getAriaLabelledByText(control),
+                    control.getAttribute('aria-label') || '',
+                    relatedInput?.getAttribute?.('aria-label') || '',
+                    relatedInput?.placeholder || '',
+                    idNameText,
+                    contextText
+                );
+
+                if (inferredFieldType === fieldType || directFieldType === fieldType || detectedFieldTypes.includes(fieldType)) {
+                    return true;
+                }
+
+                return searchTerms.some(term => term && (contextText.includes(term) || idNameText.includes(term)));
+            });
+        },
+
+        scoreComboboxOptionSetForFieldType(fieldType, options) {
+            if (!fieldType || !Array.isArray(options) || options.length === 0) {
+                return 0;
+            }
+
+            const optionPatterns = FieldDetector.patterns[fieldType]?.options || {};
+            const matchedGroups = new Set();
+            const specificGroups = new Set();
+            const genericGroups = new Set();
+            let score = 0;
+
+            for (const option of options) {
+                const normalizedText = this.normalizeText(option.text || option.element?.textContent || '');
+                if (!normalizedText) continue;
+
+                for (const [groupKey, signals] of Object.entries(optionPatterns)) {
+                    const normalizedSignals = (signals || []).map(signal => this.normalizeText(signal)).filter(Boolean);
+                    const matchedSignal = normalizedSignals.find(signal => normalizedText === signal || normalizedText.includes(signal) || signal.includes(normalizedText));
+                    if (matchedSignal) {
+                        matchedGroups.add(groupKey);
+                        if (this.isGenericStructuredChoiceText(matchedSignal) && this.isGenericStructuredChoiceText(normalizedText)) {
+                            genericGroups.add(groupKey);
+                            score += 3;
+                        } else {
+                            specificGroups.add(groupKey);
+                            score += 15;
+                        }
+                        break;
+                    }
+                }
+            }
+
+            if (specificGroups.size === 0 && genericGroups.size > 0) {
+                return 0;
+            }
+
+            score += specificGroups.size * 30;
+            score += genericGroups.size * 5;
+
+            if (fieldType === 'race' && specificGroups.size >= 3) {
+                score += 80;
+            }
+
+            if (fieldType === 'gender' && specificGroups.size >= 2) {
+                score += 45;
+            }
+
+            if (['hispanicLatino', 'veteran', 'disability'].includes(fieldType) && specificGroups.size >= 2) {
+                score += 45;
+            }
+
+            return score;
+        },
+
+        isGenericStructuredChoiceText(text) {
+            const normalizedText = this.normalizeText(text);
+            if (!normalizedText) {
+                return false;
+            }
+
+            return new Set([
+                'yes',
+                'no',
+                'true',
+                'false',
+                'decline',
+                'decline to self identify',
+                'prefer not',
+                'prefer not to answer',
+                'do not wish',
+                'do not wish to answer',
+                'don t wish to answer',
+                'choose not',
+                'choose not to answer'
+            ]).has(normalizedText);
+        },
+
+        async findStructuredDropdownControlByOptions(fieldType, preferredControls = []) {
+            const controls = [...preferredControls, ...this.getLikelyStructuredDropdownControls(fieldType)]
+                .filter((control, index, array) => array.indexOf(control) === index);
+            let bestControl = null;
+            let bestScore = 0;
+
+            if (controls.length === 0) {
+                return null;
+            }
+
+            for (const control of controls) {
+                const options = await this.getComboboxOptions(control);
+                const inferredFieldType = this.inferComboboxFieldTypeFromOptions(control, options);
+                this.closeCustomCombobox(control);
+
+                if (inferredFieldType !== fieldType) {
+                    continue;
+                }
+
+                const score = this.scoreComboboxOptionSetForFieldType(fieldType, options);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestControl = control;
+                }
+            }
+
+            return bestControl;
+        },
+
+        closeCustomCombobox(control) {
+            const root = this.resolveCustomComboboxControl(control) || control;
+            if (!root) {
+                return;
+            }
+
+            const input = root.querySelector(`input.${GREENHOUSE_SELECT_CLASSES.input}, .${GREENHOUSE_SELECT_CLASSES.input} input, input[type="text"], input[type="search"]`);
+            const keyboardTarget = input || root;
+
+            if (root.getAttribute('aria-expanded') === 'true' || keyboardTarget.getAttribute?.('aria-expanded') === 'true') {
+                keyboardTarget.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape', code: 'Escape' }));
+                keyboardTarget.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Escape', code: 'Escape' }));
+            }
+
+            keyboardTarget.blur?.();
         },
 
         findBestStructuredDropdownControl(fieldType) {
@@ -2490,6 +2917,8 @@
             const fieldType = initialFieldType || this.inferComboboxFieldTypeFromOptions(control, rawOptions);
             const config = fieldType ? this.getStructuredChoiceConfig(fieldType) : null;
             const options = this.filterComboboxOptionsForFieldType(rawOptions, fieldType);
+            const choiceContext = this.getChoiceFieldContext(control);
+            const isAcknowledgement = this.isAcknowledgementQuestion(choiceContext.question, choiceContext.sectionContext, choiceContext.label);
 
             if (fieldType === 'city' || fieldType === 'location') {
                 const locationResolved = await this.resolveLocationComboboxField(control, fieldType, rawOptions);
@@ -2511,6 +2940,16 @@
                     console.log(`[JobAutofill] No valid ${fieldType} combobox options found for detected field`);
                 }
                 return null;
+            }
+
+            if (!fieldType && options.length === 1) {
+                if (await this.applyCustomComboboxSelection(control, options[0], null)) {
+                    return {
+                        type: isAcknowledgement ? 'acknowledgement' : 'singleOptionChoice',
+                        text: options[0].text,
+                        source: 'rule'
+                    };
+                }
             }
 
             if (config?.value) {
@@ -2587,9 +3026,16 @@
             const matchedOption = options.find(option => {
                 const normalizedText = this.normalizeText(option.text || '');
                 return normalizedText.includes(normalizedSearch) || (normalizedCity && normalizedText.includes(normalizedCity));
-            }) || options[0];
+            });
 
             if (!matchedOption) {
+                this.recordDebugEvent('custom-combobox', 'skipped', {
+                    fieldType,
+                    element: control,
+                    reason: 'no-location-option-match',
+                    value: searchValue,
+                    source: 'profile'
+                });
                 return null;
             }
 
@@ -2709,6 +3155,22 @@
                 return 'phoneCountryCode';
             }
 
+            const optionScoredFieldTypes = ['race', 'gender', 'hispanicLatino', 'veteran', 'disability'];
+            let bestFieldType = null;
+            let bestScore = 0;
+
+            for (const fieldType of optionScoredFieldTypes) {
+                const score = this.scoreComboboxOptionSetForFieldType(fieldType, options);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestFieldType = fieldType;
+                }
+            }
+
+            if (bestFieldType && bestScore >= 40) {
+                return bestFieldType;
+            }
+
             return this.inferStructuredChoiceFieldType(
                 context.question,
                 context.label,
@@ -2750,19 +3212,11 @@
                     }
                 }
 
-                if (['yes', 'no', 'decline'].some(signal => normalizedText === signal || normalizedText.startsWith(signal))) {
-                    return true;
-                }
-
                 return false;
             });
 
             // If the list clearly does not belong to this field type, reject it entirely.
             if (filtered.length === 0) {
-                if (['hispanicLatino', 'veteran', 'disability'].includes(fieldType)) {
-                    return options.filter(option => !this.isPlaceholderOption(option.text || option.element?.textContent || ''));
-                }
-
                 return [];
             }
 
@@ -2876,7 +3330,7 @@
             for (let attempt = 0; attempt < 6; attempt += 1) {
                 await new Promise(resolve => setTimeout(resolve, 80));
 
-                if (attempt === 2) {
+                if (attempt === 2 && !this.isStrictStructuredChoiceField(fieldType)) {
                     const keyboardTarget = input || root;
                     keyboardTarget.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter' }));
                     keyboardTarget.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter' }));
@@ -2935,12 +3389,17 @@
             const menuClosed = currentState?.expanded === 'false' || !target?.isConnected;
             const matchesText = this.matchesCustomComboboxSelection(currentText, option, fieldType);
             const matchesHiddenValue = this.matchesCustomComboboxSelection(currentHiddenValues, option, fieldType);
+            const isStrictStructuredChoice = this.isStrictStructuredChoiceField(fieldType);
 
             if ((textChanged && matchesText) || (hiddenChanged && matchesHiddenValue)) {
                 return true;
             }
 
-            if (menuClosed && (textChanged || hiddenChanged || matchesText || matchesHiddenValue)) {
+            if (menuClosed && (matchesText || matchesHiddenValue)) {
+                return true;
+            }
+
+            if (!isStrictStructuredChoice && menuClosed && (textChanged || hiddenChanged)) {
                 return true;
             }
 
@@ -2982,13 +3441,16 @@
 
         getCustomComboboxIdentity(control) {
             const resolvedControl = this.resolveCustomComboboxControl(control) || control;
-            const root = this.getCustomComboboxContextRoot(resolvedControl);
-            return [
-                resolvedControl.getAttribute('id') || '',
-                resolvedControl.getAttribute('aria-labelledby') || '',
-                resolvedControl.getAttribute('aria-label') || '',
-                root?.textContent?.replace(/\s+/g, ' ').trim().slice(0, 180) || ''
-            ].join('|');
+            if (!resolvedControl?.dataset) {
+                return resolvedControl?.getAttribute?.('id') || resolvedControl?.getAttribute?.('aria-labelledby') || resolvedControl?.getAttribute?.('aria-label') || '';
+            }
+
+            if (!resolvedControl.dataset.jobAutofillComboboxId) {
+                this.comboboxIdentityCounter = (this.comboboxIdentityCounter || 0) + 1;
+                resolvedControl.dataset.jobAutofillComboboxId = `jobautofill-combobox-${this.comboboxIdentityCounter}`;
+            }
+
+            return resolvedControl.dataset.jobAutofillComboboxId;
         },
 
         getCustomComboboxInputElements() {
@@ -3155,6 +3617,11 @@
                 return false;
             }
 
+            const tagName = (element.tagName || '').toLowerCase();
+            if (['a', 'span', 'p', 'label'].includes(tagName)) {
+                return false;
+            }
+
             const text = (element.textContent || '').replace(/\s+/g, ' ').trim();
             const normalizedText = this.normalizeText(text);
             const style = window.getComputedStyle(element);
@@ -3174,6 +3641,9 @@
             const hasDropdownHint =
                 element.getAttribute('aria-haspopup') === 'listbox' ||
                 element.hasAttribute('aria-expanded') ||
+                element.getAttribute('role') === 'combobox' ||
+                element.getAttribute('role') === 'button' ||
+                element.hasAttribute('tabindex') ||
                 element.querySelector('svg, [class*="icon"], [class*="arrow"], [class*="chevron"]') ||
                 element.querySelector('input[type="hidden"]');
 
@@ -3182,7 +3652,7 @@
                 ?.textContent?.slice(0, 500) || '';
             const likelyQuestionContext = this.inferStructuredChoiceFieldType(contextText);
 
-            return Boolean(hasPlaceholderText || (hasDropdownHint && likelyQuestionContext));
+            return Boolean(hasDropdownHint && (hasPlaceholderText || likelyQuestionContext));
         },
 
         sortElementsTopToBottom(elements) {
@@ -3341,6 +3811,10 @@
 
         identifyCustomChoiceFieldType(control) {
             const resolvedControl = this.resolveCustomComboboxControl(control) || control;
+            const detectedFieldTypes = this.getCustomComboboxDetectedFieldTypes(resolvedControl);
+            if (detectedFieldTypes.length === 1) {
+                return detectedFieldTypes[0];
+            }
             const controlText = (this.getCustomComboboxSelectionText(resolvedControl) || resolvedControl.textContent || '').toLowerCase();
             const ariaLabel = (resolvedControl.getAttribute('aria-label') || '').toLowerCase();
             const labelledBy = FieldDetector.getAriaLabelledByText(resolvedControl).toLowerCase();
@@ -3501,6 +3975,22 @@
 
             for (const candidate of candidates.slice(0, limit)) {
                 try {
+                    if (candidate.singleOptionAutoApply && candidate.options.length === 1) {
+                        const applied =
+                            candidate.type === 'select'
+                                ? this.applySelectOption(candidate.element, candidate.options[0].element, {
+                                    fieldType: candidate.detectedFieldType,
+                                    source: 'rule'
+                                })
+                                : this.applyChoiceControl(candidate.options[0].element);
+
+                        if (applied) {
+                            this.filledFields.push({ type: 'aiChoiceField', element: candidate.options[0].element });
+                            this.highlightField(candidate.options[0].element, true);
+                        }
+                        continue;
+                    }
+
                     if (this.shouldSkipAiChoiceForProfile(candidate)) {
                         this.recordDebugEvent('ai-choice', 'skipped', {
                             fieldType: candidate.detectedFieldType,
@@ -3615,11 +4105,11 @@
                 if (!context.question) continue;
                 if (!this.looksLikeChoiceQuestion(context.question, context.sectionContext) && !context.label) continue;
 
-                const options = Array.from(select.options)
-                    .filter(option => option.value && option.textContent && !this.isPlaceholderOption(option.textContent))
-                    .map(option => ({ text: option.textContent.trim(), element: option }));
+                const options = this.getSelectableOptions(select);
 
-                if (options.length < 2 || options.length > 12) continue;
+                const isAcknowledgement = this.isAcknowledgementQuestion(context.question, context.sectionContext, context.label);
+                if (options.length > 12) continue;
+                if (options.length < 2 && !(isAcknowledgement && options.length === 1)) continue;
 
                 candidates.push({
                     type: 'select',
@@ -3629,7 +4119,8 @@
                     helperText: context.helperText,
                     sectionContext: context.sectionContext,
                     detectedFieldType: FieldDetector.identifyFieldType(select) || this.inferStructuredChoiceFieldType(context.question, context.label, context.sectionContext),
-                    options
+                    options,
+                    singleOptionAutoApply: isAcknowledgement && options.length === 1
                 });
             }
 
@@ -3698,7 +4189,7 @@
                 const normalizedQuestion = this.normalizeText(context.question || '');
                 if (!context.question) continue;
                 if (!this.looksLikeChoiceQuestion(context.question, context.sectionContext) && !context.label) continue;
-                if (normalizedQuestion.includes('terms') || normalizedQuestion.includes('privacy') || normalizedQuestion.includes('consent')) continue;
+                if ((normalizedQuestion.includes('terms') || normalizedQuestion.includes('privacy') || normalizedQuestion.includes('consent')) && !this.isAcknowledgementQuestion(context.question, context.sectionContext, context.label)) continue;
 
                 const options = checkboxes
                     .map(checkbox => ({ text: FieldDetector.getChoiceLabelText(checkbox).trim(), element: checkbox }))
@@ -3724,7 +4215,7 @@
         looksLikeChoiceQuestion(question, sectionContext) {
             const normalizedQuestion = this.normalizeText(question || '');
             const normalizedContext = this.normalizeText(sectionContext || '');
-            const negativeSignals = ['resume', 'upload', 'drag and drop', 'privacy', 'terms', 'subscribe', 'job alert'];
+            const negativeSignals = ['resume', 'upload', 'drag and drop', 'subscribe', 'job alert'];
             if (negativeSignals.some(signal => normalizedQuestion.includes(signal) || normalizedContext.includes(signal))) {
                 return false;
             }
@@ -3732,9 +4223,38 @@
             return normalizedQuestion.length >= 6;
         },
 
+        isAcknowledgementQuestion(question, sectionContext, label = '') {
+            const normalized = this.normalizeText([question, sectionContext, label].filter(Boolean).join(' '));
+            if (!normalized) {
+                return false;
+            }
+
+            const acknowledgementSignals = [
+                'privacy policy', 'candidate privacy', 'ai guidelines', 'guidelines', 'acknowledge',
+                'confirm', 'i have read', 'i agree', 'please select yes', 'consent'
+            ];
+
+            return acknowledgementSignals.some(signal => normalized.includes(signal));
+        },
+
         isPlaceholderOption(text) {
             const normalizedText = this.normalizeText(text);
             return ['select', 'choose', 'please select', 'please choose'].some(prefix => normalizedText === prefix || normalizedText.startsWith(prefix));
+        },
+
+        getSelectableOptions(select) {
+            if (!select) {
+                return [];
+            }
+
+            return Array.from(select.options)
+                .map((optionElement, index) => ({
+                    text: (optionElement.textContent || '').trim(),
+                    value: optionElement.value,
+                    element: optionElement,
+                    index
+                }))
+                .filter(option => option.text && !option.element.disabled && !this.isPlaceholderOption(option.text));
         },
 
         findBestAiChoiceMatch(options, answer) {
@@ -3802,15 +4322,33 @@
                 return false;
             }
 
-            select.value = option.value;
+            const optionElement = option instanceof HTMLOptionElement ? option : option.element;
+            const optionIndex = typeof option.index === 'number'
+                ? option.index
+                : optionElement
+                    ? Array.from(select.options).indexOf(optionElement)
+                    : -1;
+            const optionValue = optionElement ? optionElement.value : option.value;
+
+            if (optionIndex >= 0) {
+                select.selectedIndex = optionIndex;
+            }
+
+            if (typeof optionValue !== 'undefined') {
+                select.value = optionValue;
+            }
+
+            select.dispatchEvent(new Event('input', { bubbles: true }));
             select.dispatchEvent(new Event('change', { bubbles: true }));
-            const applied = select.value === option.value;
+            const applied = optionIndex >= 0
+                ? select.selectedIndex === optionIndex
+                : select.value === optionValue;
 
             this.recordDebugEvent('select', applied ? 'filled' : 'skipped', {
                 fieldType: context.fieldType,
                 element: select,
                 reason: applied ? 'selected-option' : 'select-value-did-not-stick',
-                value: option.textContent?.trim() || option.value || '',
+                value: optionElement?.textContent?.trim() || option.text || optionValue || '',
                 source: context.source
             });
 
@@ -3903,6 +4441,11 @@
                 return false;
             }
 
+            const autocomplete = (input.getAttribute('autocomplete') || '').toLowerCase();
+            if (autocomplete && !['on', 'off'].includes(autocomplete) && /(address-level|country|postal|organization|cc-|bday|sex)/.test(autocomplete)) {
+                return false;
+            }
+
             const allText = [
                 FieldDetector.getLabelText(input),
                 input.placeholder,
@@ -3912,6 +4455,14 @@
                 input.id,
                 input.closest('div, fieldset, section, article')?.textContent?.slice(0, 500) || ''
             ].filter(Boolean).join(' ').toLowerCase();
+
+            if (/autogen|select2|react-select|tomselect|chosen|combobox|listbox/.test(`${input.name || ''} ${input.id || ''}`.toLowerCase())) {
+                return false;
+            }
+
+            if (/resume|cv|cover letter\s*\*|upload|attachment|portfolio upload|drag and drop|drop files? here/.test(allText)) {
+                return false;
+            }
 
             const obviousStructuredPatterns = [
                 'first name', 'last name', 'full name', 'email', 'phone', 'linkedin', 'city', 'state',
@@ -4907,14 +5458,10 @@
                     }
 
                     const option = this.findProfileChoiceOption(
-                        Array.from(select.options).map(optionElement => ({
-                            text: optionElement.textContent.trim(),
-                            value: optionElement.value,
-                            element: optionElement
-                        })),
+                        this.getSelectableOptions(select),
                         config.value,
                         config.patterns || {}
-                    )?.element;
+                    );
                     if (!option) {
                         this.recordDebugEvent('select', 'skipped', {
                             fieldType,
@@ -4934,6 +5481,24 @@
             }
 
             this.fillBinarySelects();
+            this.fillSingleOptionSelects();
+        },
+
+        fillSingleOptionSelects() {
+            const allSelects = document.querySelectorAll('select');
+
+            for (const select of allSelects) {
+                if (select.value && select.selectedIndex > 0) continue;
+                if (!this.isElementAllowed(select) || select.disabled) continue;
+
+                const options = this.getSelectableOptions(select);
+                if (options.length !== 1) continue;
+
+                if (this.applySelectOption(select, options[0], { fieldType: 'singleOptionChoice', source: 'rule' })) {
+                    this.filledFields.push({ type: 'singleOptionChoice', element: select });
+                    this.highlightField(select, true);
+                }
+            }
         },
 
         fillBinarySelects() {

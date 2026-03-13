@@ -37,7 +37,7 @@ const DEFAULT_SETTINGS = {
         extraContext: '',
         cacheAnswers: true,
         useParsedResumeData: true,
-        maxCharacters: 320,
+        maxCharacters: 400,
         maxQuestionsPerRun: 10
     }
 };
