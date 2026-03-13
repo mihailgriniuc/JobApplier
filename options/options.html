@@ -124,6 +124,10 @@
                             <span class="data-value" id="displayGender">-</span>
                         </div>
                         <div class="data-item">
+                            <span class="data-label">Are You Hispanic/Latino?</span>
+                            <span class="data-value" id="displayHispanicLatino">-</span>
+                        </div>
+                        <div class="data-item">
                             <span class="data-label">Race/Ethnicity</span>
                             <span class="data-value" id="displayRace">-</span>
                         </div>
@@ -141,10 +145,16 @@
                 <div class="section-card">
                     <div class="section-header">
                         <h2>Resume</h2>
+                        <div class="resume-actions">
+                            <button id="replaceResumeBtn" class="btn btn-secondary btn-sm" type="button">Replace Resume</button>
+                            <button id="removeResumeBtn" class="btn btn-secondary btn-sm" type="button">Remove Resume</button>
+                        </div>
                     </div>
                     <div id="resumeDisplay" class="resume-display">
                         <p class="no-data">No resume uploaded</p>
                     </div>
+                    <input type="file" id="resumeInput" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+                    <div id="resumeResult" class="import-result hidden"></div>
                 </div>
 
                 <div class="danger-zone">
@@ -205,6 +215,28 @@
 
                     <p class="help-text">AI answers are always active for open-ended text questions. Configure the model, response length, and resume context below.</p>
 
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <h4>Cache AI answers</h4>
+                            <p>Reuse recent AI answers for repeated questions to avoid duplicate requests.</p>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="aiCacheAnswersToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <h4>Use structured resume context</h4>
+                            <p>Include parsed resume sections in AI prompts when structured data is available.</p>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="aiUseParsedResumeToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
                     <div class="ai-settings-grid">
                         <div class="form-group">
                             <label for="mistralApiKeyInput">Mistral API Key</label>
@@ -232,6 +264,12 @@
                             <textarea id="aiExtraContextInput" rows="5" placeholder="Paste resume highlights, achievements, or a short professional summary for AI-generated answers."></textarea>
                             <p class="help-text">Use this to give the model resume-specific facts without parsing PDF or DOCX files in the browser.</p>
                         </div>
+                    </div>
+
+                    <div class="resume-display">
+                        <span class="data-label">Structured Resume Status</span>
+                        <span class="data-value" id="parsedResumeStatus">Checking structured resume data...</span>
+                        <p class="help-text" id="parsedResumeDetails">Structured resume sections will appear here when they become available.</p>
                     </div>
 
                     <p class="help-text help-text--warning">When enabled, the extension sends the question, relevant job-posting text, your saved profile fields, and this extra context to Mistral so it can draft an answer.</p>
@@ -410,6 +448,65 @@
                         <option value="2_weeks">2 Weeks</option>
                         <option value="3_weeks">3 Weeks</option>
                         <option value="4_weeks">4 Weeks</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editGender">Gender</label>
+                        <select id="editGender">
+                            <option value="">Select...</option>
+                            <option value="male">Male</option>
+                            <option value="female">Female</option>
+                            <option value="decline">Decline to self-identify</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="editHispanicLatino">Are you Hispanic/Latino?</label>
+                        <select id="editHispanicLatino">
+                            <option value="">Select...</option>
+                            <option value="yes">Yes</option>
+                            <option value="no">No</option>
+                            <option value="decline">Decline to self-identify</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label for="editRace">Race/Ethnicity</label>
+                    <select id="editRace">
+                        <option value="">Select...</option>
+                        <option value="american_indian">American Indian or Alaska Native</option>
+                        <option value="asian">Asian</option>
+                        <option value="black">Black or African American</option>
+                        <option value="hispanic">Hispanic or Latino</option>
+                        <option value="native_hawaiian">Native Hawaiian or Pacific Islander</option>
+                        <option value="white">White</option>
+                        <option value="two_or_more">Two or More Races</option>
+                        <option value="decline">Decline to self-identify</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editVeteran">Veteran Status</label>
+                    <select id="editVeteran">
+                        <option value="">Select...</option>
+                        <option value="not_veteran">Not a Protected Veteran</option>
+                        <option value="disabled_veteran">Disabled Veteran</option>
+                        <option value="recently_separated">Recently Separated Veteran</option>
+                        <option value="active_wartime">Active Duty Wartime Veteran</option>
+                        <option value="armed_forces">Armed Forces Service Medal Veteran</option>
+                        <option value="decline">Decline to self-identify</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="editDisability">Disability Status</label>
+                    <select id="editDisability">
+                        <option value="">Select...</option>
+                        <option value="yes">Yes, I have a disability</option>
+                        <option value="no">No, I do not have a disability</option>
+                        <option value="decline">Decline to self-identify</option>
                     </select>
                 </div>
             </div>

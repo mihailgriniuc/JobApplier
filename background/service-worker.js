@@ -29,7 +29,7 @@ function getDefaultAiAssistSettings() {
         apiKey: '',
         extraContext: '',
         maxCharacters: 320,
-        maxQuestionsPerRun: 3
+        maxQuestionsPerRun: 10
     };
 }
 
@@ -81,6 +81,7 @@ function buildAiMessages(payload, aiSettings) {
     const userProfile = JSON.stringify(payload.userProfile || {}, null, 2);
     const choiceOptions = Array.isArray(payload.choiceOptions) ? payload.choiceOptions.filter(Boolean) : [];
     const isChoicePrompt = choiceOptions.length > 0;
+    const resumeContext = (payload.resumeContext || '').trim();
 
     return [
         {
@@ -89,6 +90,7 @@ function buildAiMessages(payload, aiSettings) {
                 'You write concise, job-application answers for screening questions.',
                 'Use only the provided profile, job posting, and extra context.',
                 'Do not invent employers, years, certifications, tools, or achievements not present in the context.',
+                'If structured resume context is provided, prioritize those facts and phrasing over generic filler.',
                 'Answer only the specific question for the specific field shown in the prompt.',
                 'If helper text narrows the answer, follow it.',
                 isChoicePrompt ? 'When options are provided, choose the single option that best matches the user profile for that field. Ignore unrelated profile details. For example, do not use location for ethnicity, disability, sponsorship, gender, veteran, or similar questions. Return exactly one option label from the list and do not explain your choice.' : '',
@@ -111,6 +113,7 @@ function buildAiMessages(payload, aiSettings) {
                 `Page title: ${payload.pageTitle || ''}`,
                 'User profile:',
                 userProfile,
+                resumeContext ? `Structured resume context:\n${resumeContext}` : '',
                 aiSettings.extraContext ? `Additional resume context: ${aiSettings.extraContext}` : '',
                 payload.jobPostingText ? `Job posting excerpt:\n${payload.jobPostingText}` : ''
             ].filter(Boolean).join('\n\n')

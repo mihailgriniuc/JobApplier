@@ -276,9 +276,12 @@ const FieldDetector = {
         const placeholder = input.placeholder || '';
         const inputType = input.type || '';
         const ariaLabel = input.getAttribute('aria-label') || '';
+        const role = input.getAttribute('role') || '';
+        const ariaRequired = input.getAttribute('aria-required') || '';
         const ariaLabelledBy = this.getAriaLabelledByText(input);
         const containerText = (input.closest('div, fieldset, section, article')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300);
         const allText = `${labelText} ${questionText} ${inputName} ${inputId} ${placeholder} ${ariaLabel} ${ariaLabelledBy} ${containerText}`;
+        const hasValue = typeof input.value === 'string' && input.value.trim().length > 0;
 
         return {
             descriptor: this.getElementDebugDescriptor(input),
@@ -290,8 +293,15 @@ const FieldDetector = {
             labelText,
             questionText,
             ariaLabel,
+            role,
+            ariaRequired,
             ariaLabelledBy,
             containerText,
+            currentValue: hasValue ? input.value.trim().slice(0, 120) : '',
+            hasValue,
+            isRequired: Boolean(input.required || ariaRequired === 'true'),
+            controlKind: this.isCustomComboboxInput(input) ? 'custom-combobox' : (input.tagName || '').toLowerCase(),
+            isVisible: Boolean(input.offsetParent || input.getClientRects?.().length),
             normalizedAllText: this.normalizeText(allText)
         };
     },
@@ -471,6 +481,26 @@ const FieldDetector = {
             // Skip hidden, submit, button, checkbox (for individual checkboxes), file inputs
             const skipReason = this.getFieldSkipReason(input);
             if (skipReason) {
+                if (options.includeDiagnostics && skipReason === 'custom-combobox-input') {
+                    const customResult = this.identifyFieldType(input, { includeMeta: true });
+                    if (customResult.fieldType) {
+                        diagnostics.detected.push({
+                            status: 'detected',
+                            fieldType: customResult.fieldType,
+                            reason: customResult.reason,
+                            matchedBy: customResult.matchedBy,
+                            matchedValue: customResult.matchedValue,
+                            context: {
+                                ...customResult.context,
+                                controlKind: 'custom-combobox'
+                            },
+                            diagnosticOnly: true,
+                            skipReason
+                        });
+                        return;
+                    }
+                }
+
                 if (options.includeDiagnostics) {
                     diagnostics.skipped.push({
                         status: 'skipped',
@@ -519,7 +549,13 @@ const FieldDetector = {
                     unmatchedCount: diagnostics.unmatched.length,
                     skippedCount: diagnostics.skipped.length,
                     detectedTypes: Object.fromEntries(
-                        Object.entries(detectedFields).map(([fieldType, fieldInputs]) => [fieldType, fieldInputs.length])
+                        Object.entries(
+                            diagnostics.detected.reduce((counts, item) => {
+                                const fieldType = item.fieldType || 'unknown';
+                                counts[fieldType] = (counts[fieldType] || 0) + 1;
+                                return counts;
+                            }, {})
+                        )
                     )
                 }
             };

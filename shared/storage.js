@@ -7,11 +7,22 @@ const StorageKeys = {
     USER_DATA: 'jobAutofill_userData',
     SETTINGS: 'jobAutofill_settings',
     RESUME: 'jobAutofill_resume',
+    RESUME_PARSED: 'jobAutofill_resumeParsed',
+    AI_ANSWER_CACHE: 'jobAutofill_aiAnswerCache',
     CONSENT: 'jobAutofill_consent',
     SCHEMA_VERSION: 'jobAutofill_schemaVersion'
 };
 
-const CURRENT_SCHEMA_VERSION = 1;
+const CURRENT_SCHEMA_VERSION = 2;
+const MAX_AI_ANSWER_CACHE_ENTRIES = 100;
+const PARSED_RESUME_SECTION_KEYS = [
+    'resumeSummary',
+    'skills',
+    'experienceHighlights',
+    'educationHighlights',
+    'certifications',
+    'projects'
+];
 
 let localAiConfigCache = null;
 
@@ -24,10 +35,132 @@ const DEFAULT_SETTINGS = {
         model: 'mistral-small-latest',
         apiKey: '',
         extraContext: '',
+        cacheAnswers: true,
+        useParsedResumeData: true,
         maxCharacters: 320,
-        maxQuestionsPerRun: 3
+        maxQuestionsPerRun: 10
     }
 };
+
+function sanitizeStringList(value, maxItems = 25) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    const seen = new Set();
+
+    return value
+        .map(item => typeof item === 'string' ? item.trim() : '')
+        .filter(Boolean)
+        .filter(item => {
+            const normalizedItem = item.toLowerCase();
+            if (seen.has(normalizedItem)) {
+                return false;
+            }
+            seen.add(normalizedItem);
+            return true;
+        })
+        .slice(0, maxItems);
+}
+
+function getIsoTimestamp(value, fallback = null) {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return fallback;
+    }
+
+    return Number.isNaN(Date.parse(trimmed)) ? fallback : trimmed;
+}
+
+function hasParsedResumeSections(parsedResume) {
+    if (!parsedResume || typeof parsedResume !== 'object') {
+        return false;
+    }
+
+    return PARSED_RESUME_SECTION_KEYS.some(key => {
+        const value = parsedResume[key];
+        return Array.isArray(value) ? value.length > 0 : Boolean(value);
+    });
+}
+
+function createDefaultParsedResumeData(resumeData) {
+    return normalizeParsedResumeData({
+        isParsed: false,
+        parser: '',
+        sourceFileName: resumeData?.name || '',
+        sourceUploadedAt: resumeData?.uploadedAt || null,
+        parsedAt: null,
+        updatedAt: new Date().toISOString(),
+        resumeSummary: '',
+        skills: [],
+        experienceHighlights: [],
+        educationHighlights: [],
+        certifications: [],
+        projects: []
+    });
+}
+
+function normalizeParsedResumeData(parsedResume) {
+    const source = parsedResume && typeof parsedResume === 'object' ? parsedResume : {};
+    const normalized = {
+        isParsed: source.isParsed === true,
+        parser: typeof source.parser === 'string' ? source.parser.trim() : '',
+        sourceFileName: typeof source.sourceFileName === 'string' ? source.sourceFileName.trim() : '',
+        sourceUploadedAt: getIsoTimestamp(source.sourceUploadedAt, null),
+        parsedAt: getIsoTimestamp(source.parsedAt, null),
+        updatedAt: getIsoTimestamp(source.updatedAt, new Date().toISOString()),
+        resumeSummary: typeof source.resumeSummary === 'string' ? source.resumeSummary.trim() : '',
+        skills: sanitizeStringList(source.skills, 40),
+        experienceHighlights: sanitizeStringList(source.experienceHighlights, 20),
+        educationHighlights: sanitizeStringList(source.educationHighlights, 12),
+        certifications: sanitizeStringList(source.certifications, 20),
+        projects: sanitizeStringList(source.projects, 20)
+    };
+
+    normalized.isParsed = normalized.isParsed && hasParsedResumeSections(normalized);
+    if (!normalized.isParsed) {
+        normalized.parsedAt = null;
+    }
+
+    return normalized;
+}
+
+function sanitizeAiAnswerCache(cache) {
+    if (!cache || typeof cache !== 'object' || Array.isArray(cache)) {
+        return {};
+    }
+
+    const now = new Date().toISOString();
+    const entries = Object.entries(cache)
+        .map(([cacheKey, entry]) => {
+            if (!cacheKey || typeof cacheKey !== 'string' || !entry || typeof entry !== 'object') {
+                return null;
+            }
+
+            const answer = typeof entry.answer === 'string' ? entry.answer.trim() : '';
+            if (!answer) {
+                return null;
+            }
+
+            return [cacheKey, {
+                answer,
+                model: typeof entry.model === 'string' ? entry.model.trim() : '',
+                question: typeof entry.question === 'string' ? entry.question.trim() : '',
+                fieldLabel: typeof entry.fieldLabel === 'string' ? entry.fieldLabel.trim() : '',
+                fieldHtmlType: typeof entry.fieldHtmlType === 'string' ? entry.fieldHtmlType.trim() : '',
+                updatedAt: getIsoTimestamp(entry.updatedAt, now)
+            }];
+        })
+        .filter(Boolean)
+        .sort((left, right) => Date.parse(right[1].updatedAt) - Date.parse(left[1].updatedAt))
+        .slice(0, MAX_AI_ANSWER_CACHE_ENTRIES);
+
+    return Object.fromEntries(entries);
+}
 
 async function loadLocalAiConfig() {
     if (localAiConfigCache) {
@@ -63,6 +196,8 @@ function sanitizeAiAssistSettings(aiAssist) {
         model: (aiAssist?.model || DEFAULT_SETTINGS.aiAssist.model).trim() || DEFAULT_SETTINGS.aiAssist.model,
         apiKey: (aiAssist?.apiKey || '').trim(),
         extraContext: (aiAssist?.extraContext || '').trim(),
+        cacheAnswers: aiAssist?.cacheAnswers !== false,
+        useParsedResumeData: aiAssist?.useParsedResumeData !== false,
         maxCharacters: Number.isFinite(maxCharacters)
             ? Math.min(Math.max(Math.round(maxCharacters), 80), 1200)
             : DEFAULT_SETTINGS.aiAssist.maxCharacters,
@@ -140,18 +275,24 @@ const Storage = {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
             reader.onload = async () => {
-                const resumeData = {
-                    name: file.name,
-                    type: file.type,
-                    size: file.size,
-                    data: reader.result, // base64 encoded
-                    uploadedAt: new Date().toISOString()
-                };
+                try {
+                    const resumeData = {
+                        name: file.name,
+                        type: file.type,
+                        size: file.size,
+                        data: reader.result,
+                        uploadedAt: new Date().toISOString()
+                    };
 
-                await chrome.storage.local.set({
-                    [StorageKeys.RESUME]: resumeData
-                });
-                resolve();
+                    await chrome.storage.local.set({
+                        [StorageKeys.RESUME]: resumeData,
+                        [StorageKeys.RESUME_PARSED]: createDefaultParsedResumeData(resumeData),
+                        [StorageKeys.SCHEMA_VERSION]: CURRENT_SCHEMA_VERSION
+                    });
+                    resolve();
+                } catch (error) {
+                    reject(error);
+                }
             };
             reader.onerror = reject;
             reader.readAsDataURL(file);
@@ -172,7 +313,62 @@ const Storage = {
      * @returns {Promise<void>}
      */
     async deleteResume() {
-        await chrome.storage.local.remove([StorageKeys.RESUME]);
+        await chrome.storage.local.remove([StorageKeys.RESUME, StorageKeys.RESUME_PARSED]);
+    },
+
+    async getParsedResumeData() {
+        const result = await chrome.storage.local.get([StorageKeys.RESUME, StorageKeys.RESUME_PARSED]);
+        const resume = result[StorageKeys.RESUME] || null;
+        const parsedResume = result[StorageKeys.RESUME_PARSED] || null;
+
+        if (parsedResume) {
+            return normalizeParsedResumeData(parsedResume);
+        }
+
+        return resume ? createDefaultParsedResumeData(resume) : null;
+    },
+
+    async saveParsedResumeData(parsedResumeData) {
+        const resume = await this.getResume();
+        const normalized = normalizeParsedResumeData({
+            ...(resume ? createDefaultParsedResumeData(resume) : {}),
+            ...(parsedResumeData || {})
+        });
+
+        await chrome.storage.local.set({
+            [StorageKeys.RESUME_PARSED]: normalized,
+            [StorageKeys.SCHEMA_VERSION]: CURRENT_SCHEMA_VERSION
+        });
+    },
+
+    async getAiAnswerCache() {
+        const result = await chrome.storage.local.get([StorageKeys.AI_ANSWER_CACHE]);
+        return sanitizeAiAnswerCache(result[StorageKeys.AI_ANSWER_CACHE]);
+    },
+
+    async setAiAnswerCacheEntry(cacheKey, entry) {
+        if (!cacheKey || typeof cacheKey !== 'string') {
+            return;
+        }
+
+        const cache = await this.getAiAnswerCache();
+        const nextCache = sanitizeAiAnswerCache({
+            ...cache,
+            [cacheKey]: {
+                ...(cache[cacheKey] || {}),
+                ...(entry || {}),
+                updatedAt: new Date().toISOString()
+            }
+        });
+
+        await chrome.storage.local.set({
+            [StorageKeys.AI_ANSWER_CACHE]: nextCache,
+            [StorageKeys.SCHEMA_VERSION]: CURRENT_SCHEMA_VERSION
+        });
+    },
+
+    async clearAiAnswerCache() {
+        await chrome.storage.local.remove([StorageKeys.AI_ANSWER_CACHE]);
     },
 
     /**
@@ -236,6 +432,7 @@ const Storage = {
     async exportData() {
         const userData = await this.getUserData();
         const resume = await this.getResume();
+        const parsedResume = await this.getParsedResumeData();
         const settings = await this.getSettings();
 
         return {
@@ -248,6 +445,7 @@ const Storage = {
                 size: resume.size,
                 data: resume.data
             } : null,
+            parsedResume,
             settings
         };
     },
@@ -277,6 +475,16 @@ const Storage = {
                 await chrome.storage.local.set({
                     [StorageKeys.RESUME]: data.resume
                 });
+
+                if (data.parsedResume) {
+                    await this.saveParsedResumeData(data.parsedResume);
+                } else {
+                    await chrome.storage.local.set({
+                        [StorageKeys.RESUME_PARSED]: createDefaultParsedResumeData(data.resume)
+                    });
+                }
+            } else if (data.parsedResume) {
+                await this.saveParsedResumeData(data.parsedResume);
             }
 
             if (data.settings) {
@@ -321,4 +529,5 @@ if (typeof window !== 'undefined') {
     window.Storage = Storage;
     window.StorageKeys = StorageKeys;
     window.DEFAULT_SETTINGS = DEFAULT_SETTINGS;
+    window.MAX_AI_ANSWER_CACHE_ENTRIES = MAX_AI_ANSWER_CACHE_ENTRIES;
 }

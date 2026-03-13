@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         formerEmployee: document.getElementById('displayFormerEmployee'),
         startAvailability: document.getElementById('displayStartAvailability'),
         gender: document.getElementById('displayGender'),
+        hispanicLatino: document.getElementById('displayHispanicLatino'),
         race: document.getElementById('displayRace'),
         veteran: document.getElementById('displayVeteran'),
         disability: document.getElementById('displayDisability')
@@ -39,17 +40,25 @@ document.addEventListener('DOMContentLoaded', async () => {
     const autoDetectToggle = document.getElementById('autoDetectToggle');
     const showIndicatorsToggle = document.getElementById('showIndicatorsToggle');
     const confirmFillToggle = document.getElementById('confirmFillToggle');
+    const aiCacheAnswersToggle = document.getElementById('aiCacheAnswersToggle');
+    const aiUseParsedResumeToggle = document.getElementById('aiUseParsedResumeToggle');
     const mistralApiKeyInput = document.getElementById('mistralApiKeyInput');
     const aiModelInput = document.getElementById('aiModelInput');
     const aiMaxCharactersInput = document.getElementById('aiMaxCharactersInput');
     const aiMaxQuestionsInput = document.getElementById('aiMaxQuestionsInput');
     const aiExtraContextInput = document.getElementById('aiExtraContextInput');
+    const parsedResumeStatus = document.getElementById('parsedResumeStatus');
+    const parsedResumeDetails = document.getElementById('parsedResumeDetails');
 
     // Import/Export
     const exportBtn = document.getElementById('exportBtn');
     const importDropZone = document.getElementById('importDropZone');
     const importInput = document.getElementById('importInput');
     const importResult = document.getElementById('importResult');
+    const replaceResumeBtn = document.getElementById('replaceResumeBtn');
+    const removeResumeBtn = document.getElementById('removeResumeBtn');
+    const resumeInput = document.getElementById('resumeInput');
+    const resumeResult = document.getElementById('resumeResult');
 
     // Clear data
     const clearDataBtn = document.getElementById('clearDataBtn');
@@ -63,6 +72,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         gender: {
             male: 'Male',
             female: 'Female',
+            decline: 'Decline to self-identify'
+        },
+        hispanicLatino: {
+            yes: 'Yes',
+            no: 'No',
             decline: 'Decline to self-identify'
         },
         race: {
@@ -120,32 +134,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     async function loadData() {
         const userData = await Storage.getUserData();
 
-        if (!userData) {
-            return;
-        }
-
         // Display personal info
-        displayElements.fullName.textContent = userData.fullName || '-';
-        displayElements.email.textContent = userData.email || '-';
-        displayElements.phone.textContent = userData.phone || '-';
-        displayElements.linkedin.textContent = userData.linkedin || '-';
-        displayElements.location.textContent = formatLocation(userData.city, userData.state);
+        displayElements.fullName.textContent = userData?.fullName || '-';
+        displayElements.email.textContent = userData?.email || '-';
+        displayElements.phone.textContent = userData?.phone || '-';
+        displayElements.linkedin.textContent = userData?.linkedin || '-';
+        displayElements.location.textContent = formatLocation(userData?.city, userData?.state);
 
         // Display work auth
-        displayElements.workAuth.textContent = labelMappings.yesNo[userData.workAuth] || '-';
-        displayElements.sponsorship.textContent = labelMappings.yesNo[userData.sponsorship] || '-';
-        displayElements.onsiteComfort.textContent = labelMappings.yesNo[userData.onsiteComfort] || '-';
-        displayElements.relocationWillingness.textContent = labelMappings.yesNo[userData.relocationWillingness] || '-';
-        displayElements.internshipStatus.textContent = labelMappings.yesNo[userData.internshipStatus] || '-';
-        displayElements.over18.textContent = labelMappings.yesNo[userData.over18] || '-';
-        displayElements.formerEmployee.textContent = labelMappings.yesNo[userData.formerEmployee] || '-';
-        displayElements.startAvailability.textContent = labelMappings.startAvailability[userData.startAvailability] || '-';
+        displayElements.workAuth.textContent = labelMappings.yesNo[userData?.workAuth] || '-';
+        displayElements.sponsorship.textContent = labelMappings.yesNo[userData?.sponsorship] || '-';
+        displayElements.onsiteComfort.textContent = labelMappings.yesNo[userData?.onsiteComfort] || '-';
+        displayElements.relocationWillingness.textContent = labelMappings.yesNo[userData?.relocationWillingness] || '-';
+        displayElements.internshipStatus.textContent = labelMappings.yesNo[userData?.internshipStatus] || '-';
+        displayElements.over18.textContent = labelMappings.yesNo[userData?.over18] || '-';
+        displayElements.formerEmployee.textContent = labelMappings.yesNo[userData?.formerEmployee] || '-';
+        displayElements.startAvailability.textContent = labelMappings.startAvailability[userData?.startAvailability] || '-';
 
         // Display demographics
-        displayElements.gender.textContent = labelMappings.gender[userData.gender] || '-';
-        displayElements.race.textContent = labelMappings.race[userData.race] || '-';
-        displayElements.veteran.textContent = labelMappings.veteran[userData.veteran] || '-';
-        displayElements.disability.textContent = labelMappings.disability[userData.disability] || '-';
+        displayElements.gender.textContent = labelMappings.gender[userData?.gender] || '-';
+        displayElements.hispanicLatino.textContent = labelMappings.hispanicLatino[userData?.hispanicLatino] || '-';
+        displayElements.race.textContent = labelMappings.race[userData?.race] || '-';
+        displayElements.veteran.textContent = labelMappings.veteran[userData?.veteran] || '-';
+        displayElements.disability.textContent = labelMappings.disability[userData?.disability] || '-';
 
         // Load resume info
         const resume = await Storage.getResume();
@@ -163,7 +174,13 @@ document.addEventListener('DOMContentLoaded', async () => {
           </div>
         </div>
       `;
+                } else {
+                        resumeDisplay.innerHTML = '<p class="no-data">No resume uploaded</p>';
         }
+
+                removeResumeBtn.disabled = !resume;
+
+                await renderParsedResumeStatus(resume);
     }
 
     /**
@@ -175,10 +192,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         autoDetectToggle.checked = settings.autoDetect !== false;
         showIndicatorsToggle.checked = settings.showIndicators !== false;
         confirmFillToggle.checked = settings.confirmBeforeFill === true;
+        aiCacheAnswersToggle.checked = settings.aiAssist?.cacheAnswers !== false;
+        aiUseParsedResumeToggle.checked = settings.aiAssist?.useParsedResumeData !== false;
         mistralApiKeyInput.value = settings.aiAssist?.apiKey || '';
         aiModelInput.value = settings.aiAssist?.model || 'mistral-small-latest';
         aiMaxCharactersInput.value = settings.aiAssist?.maxCharacters || 320;
-        aiMaxQuestionsInput.value = settings.aiAssist?.maxQuestionsPerRun || 3;
+        aiMaxQuestionsInput.value = settings.aiAssist?.maxQuestionsPerRun || 10;
         aiExtraContextInput.value = settings.aiAssist?.extraContext || '';
     }
 
@@ -200,6 +219,53 @@ document.addEventListener('DOMContentLoaded', async () => {
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
+    function getParsedResumeSections(parsedResumeData) {
+        if (!parsedResumeData || typeof parsedResumeData !== 'object') {
+            return null;
+        }
+
+        const sections = {
+            resumeSummary: typeof parsedResumeData.resumeSummary === 'string' ? parsedResumeData.resumeSummary.trim() : '',
+            skills: Array.isArray(parsedResumeData.skills) ? parsedResumeData.skills.filter(Boolean) : [],
+            experienceHighlights: Array.isArray(parsedResumeData.experienceHighlights) ? parsedResumeData.experienceHighlights.filter(Boolean) : [],
+            educationHighlights: Array.isArray(parsedResumeData.educationHighlights) ? parsedResumeData.educationHighlights.filter(Boolean) : [],
+            certifications: Array.isArray(parsedResumeData.certifications) ? parsedResumeData.certifications.filter(Boolean) : [],
+            projects: Array.isArray(parsedResumeData.projects) ? parsedResumeData.projects.filter(Boolean) : []
+        };
+
+        return Object.values(sections).some(value => Array.isArray(value) ? value.length > 0 : Boolean(value))
+            ? sections
+            : null;
+    }
+
+    async function renderParsedResumeStatus(resume) {
+        const parsedResumeData = await Storage.getParsedResumeData();
+        const sections = getParsedResumeSections(parsedResumeData);
+
+        if (!resume) {
+            parsedResumeStatus.textContent = 'No resume uploaded';
+            parsedResumeDetails.textContent = 'Upload a resume to make structured resume context available when parsing data is present.';
+            return;
+        }
+
+        if (!sections || parsedResumeData?.isParsed !== true) {
+            parsedResumeStatus.textContent = 'Resume uploaded';
+            parsedResumeDetails.textContent = 'Your resume is uploaded, but structured sections are not yet available. AI answers will still use your saved profile and extra context.';
+            return;
+        }
+
+        const sectionDetails = [];
+        if (sections.resumeSummary) sectionDetails.push('summary');
+        if (sections.skills.length) sectionDetails.push(`${sections.skills.length} skills`);
+        if (sections.experienceHighlights.length) sectionDetails.push(`${sections.experienceHighlights.length} experience highlights`);
+        if (sections.educationHighlights.length) sectionDetails.push(`${sections.educationHighlights.length} education highlights`);
+        if (sections.certifications.length) sectionDetails.push(`${sections.certifications.length} certifications`);
+        if (sections.projects.length) sectionDetails.push(`${sections.projects.length} projects`);
+
+        parsedResumeStatus.textContent = 'Structured resume context ready';
+        parsedResumeDetails.textContent = `Available sections: ${sectionDetails.join(', ')}.`;
+    }
+
     // Edit modal
     editPersonalBtn.addEventListener('click', async () => {
         const userData = await Storage.getUserData();
@@ -218,6 +284,11 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('editOver18').value = userData.over18 || '';
             document.getElementById('editFormerEmployee').value = userData.formerEmployee || '';
             document.getElementById('editStartAvailability').value = userData.startAvailability || '';
+            document.getElementById('editGender').value = userData.gender || '';
+            document.getElementById('editHispanicLatino').value = userData.hispanicLatino || '';
+            document.getElementById('editRace').value = userData.race || '';
+            document.getElementById('editVeteran').value = userData.veteran || '';
+            document.getElementById('editDisability').value = userData.disability || '';
         }
         editModal.classList.remove('hidden');
     });
@@ -249,7 +320,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             internshipStatus: document.getElementById('editInternshipStatus').value,
             over18: document.getElementById('editOver18').value,
             formerEmployee: document.getElementById('editFormerEmployee').value,
-            startAvailability: document.getElementById('editStartAvailability').value
+            startAvailability: document.getElementById('editStartAvailability').value,
+            gender: document.getElementById('editGender').value,
+            hispanicLatino: document.getElementById('editHispanicLatino').value,
+            race: document.getElementById('editRace').value,
+            veteran: document.getElementById('editVeteran').value,
+            disability: document.getElementById('editDisability').value
         });
 
         const validation = Validation.validateUserData(updatedUserData);
@@ -274,6 +350,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     autoDetectToggle.addEventListener('change', saveSettings);
     showIndicatorsToggle.addEventListener('change', saveSettings);
     confirmFillToggle.addEventListener('change', saveSettings);
+    aiCacheAnswersToggle.addEventListener('change', saveSettings);
+    aiUseParsedResumeToggle.addEventListener('change', saveSettings);
     mistralApiKeyInput.addEventListener('change', saveSettings);
     aiModelInput.addEventListener('change', saveSettings);
     aiMaxCharactersInput.addEventListener('change', saveSettings);
@@ -287,10 +365,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             confirmBeforeFill: confirmFillToggle.checked,
             aiAssist: {
                 enabled: true,
+                cacheAnswers: aiCacheAnswersToggle.checked,
+                useParsedResumeData: aiUseParsedResumeToggle.checked,
                 apiKey: mistralApiKeyInput.value.trim(),
                 model: aiModelInput.value.trim() || 'mistral-small-latest',
                 maxCharacters: Number(aiMaxCharactersInput.value) || 320,
-                maxQuestionsPerRun: Number(aiMaxQuestionsInput.value) || 3,
+                maxQuestionsPerRun: Number(aiMaxQuestionsInput.value) || 10,
                 extraContext: aiExtraContextInput.value.trim()
             }
         });
@@ -300,6 +380,48 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('shortcutsLink').addEventListener('click', (e) => {
         e.preventDefault();
         chrome.tabs.create({ url: 'chrome://extensions/shortcuts' });
+    });
+
+    replaceResumeBtn.addEventListener('click', () => resumeInput.click());
+
+    resumeInput.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) {
+            return;
+        }
+
+        if (!Validation.isValidResumeType(file)) {
+            showResumeResult(false, 'Please upload a PDF, DOC, or DOCX resume file.');
+            resumeInput.value = '';
+            return;
+        }
+
+        if (!Validation.isValidFileSize(file)) {
+            showResumeResult(false, 'Resume file must be 5 MB or smaller.');
+            resumeInput.value = '';
+            return;
+        }
+
+        try {
+            await Storage.saveResume(file);
+            await loadData();
+            showResumeResult(true, `Saved ${file.name} as the active resume.`);
+        } catch (error) {
+            showResumeResult(false, `Failed to save resume: ${error.message}`);
+        } finally {
+            resumeInput.value = '';
+        }
+    });
+
+    removeResumeBtn.addEventListener('click', async () => {
+        const confirmed = confirm('Remove the currently saved resume and its parsed resume data?');
+        if (!confirmed) {
+            return;
+        }
+
+        await Storage.deleteResume();
+        await loadData();
+        showResumeResult(true, 'Removed the saved resume.');
     });
 
     // Export
@@ -362,6 +484,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             if (result.success) {
                 await loadData();
+                await loadSettings();
             }
         } catch (error) {
             showImportResult(false, 'Invalid JSON file: ' + error.message);
@@ -378,19 +501,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         }, 5000);
     }
 
+    function showResumeResult(success, message) {
+        resumeResult.classList.remove('hidden', 'success', 'error');
+        resumeResult.classList.add(success ? 'success' : 'error');
+        resumeResult.textContent = message;
+
+        setTimeout(() => {
+            resumeResult.classList.add('hidden');
+        }, 5000);
+    }
+
     // Clear data
     clearDataBtn.addEventListener('click', async () => {
         if (confirm('Are you sure you want to delete all your saved data? This action cannot be undone.')) {
             await Storage.clearAllData();
             await loadData();
+            await loadSettings();
             alert('All data has been deleted.');
-
-            // Reset displays
-            Object.values(displayElements).forEach(el => {
-                el.textContent = '-';
-            });
-
-            document.getElementById('resumeDisplay').innerHTML = '<p class="no-data">No resume uploaded</p>';
         }
     });
 });

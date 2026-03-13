@@ -21,6 +21,9 @@
     const ContentScript = {
         userData: null,
         resumeData: null,
+        parsedResumeData: null,
+        aiAnswerCache: {},
+        sessionAnswerCache: new Map(),
         filledFields: [],
         mutationObserver: null,
         unloadHandler: null,
@@ -37,20 +40,29 @@
                 apiKey: '',
                 extraContext: '',
                 maxCharacters: 320,
-                maxQuestionsPerRun: 3
+                maxQuestionsPerRun: 10
             }
         },
         allowedFormKeys: null,
         formKeyMap: new WeakMap(),
         formKeyCounter: 0,
         debugSession: null,
+        floatingWidget: null,
+        floatingButton: null,
+        floatingPanel: null,
+        hoverOpenTimer: null,
+        hoverCloseTimer: null,
+        floatingButtonResetTimer: null,
+        lastStatusSnapshot: null,
 
         resetDebugSession() {
+            this.sessionAnswerCache = new Map();
             this.debugSession = {
                 startedAt: new Date().toISOString(),
                 detectionReports: [],
                 events: []
             };
+            this.lastStatusSnapshot = null;
             this.syncDebugState();
         },
 
@@ -60,7 +72,8 @@
             }
 
             window.JobAutofillDebug = {
-                lastRun: this.debugSession
+                lastRun: this.debugSession,
+                lastStatusSnapshot: this.lastStatusSnapshot
             };
         },
 
@@ -92,8 +105,449 @@
                 labelText: context?.labelText || '',
                 questionText: context?.questionText || '',
                 placeholder: context?.placeholder || element.placeholder || '',
-                currentValue: element.value || element.textContent?.trim() || ''
+                currentValue: context?.currentValue || element.value || element.textContent?.trim() || '',
+                isRequired: Boolean(context?.isRequired),
+                controlKind: context?.controlKind || context?.tagName || (element.tagName || '').toLowerCase()
             };
+        },
+
+        escapeHtml(value) {
+            return String(value ?? '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        },
+
+        getFieldTypeLabel(fieldType) {
+            const labels = {
+                aiChoiceField: 'AI choice',
+                aiComboboxChoice: 'AI combobox choice',
+                aiTextQuestion: 'AI text question',
+                city: 'City',
+                country: 'Country',
+                disability: 'Disability status',
+                email: 'Email',
+                firstName: 'First name',
+                formerEmployee: 'Former employee',
+                fullName: 'Full name',
+                gender: 'Gender',
+                hispanicLatino: 'Hispanic/Latino',
+                internshipStatus: 'Internship status',
+                lastName: 'Last name',
+                linkedin: 'LinkedIn',
+                location: 'Location',
+                onsiteComfort: 'Onsite comfort',
+                over18: '18+ confirmation',
+                phone: 'Phone',
+                phoneCountryCode: 'Phone country code',
+                preferredFirstName: 'Preferred first name',
+                pronouns: 'Pronouns',
+                race: 'Race',
+                relocationWillingness: 'Relocation willingness',
+                resume: 'Resume upload',
+                sexualOrientation: 'Sexual orientation',
+                sponsorship: 'Sponsorship',
+                startAvailability: 'Start availability',
+                state: 'State',
+                transgender: 'Transgender status',
+                veteran: 'Veteran status',
+                workAuth: 'Work authorization'
+            };
+
+            if (labels[fieldType]) {
+                return labels[fieldType];
+            }
+
+            return String(fieldType || 'Detected field')
+                .replace(/([a-z])([A-Z])/g, '$1 $2')
+                .replace(/[_-]+/g, ' ')
+                .replace(/\b\w/g, char => char.toUpperCase());
+        },
+
+        humanizeReason(reason) {
+            const labels = {
+                'already-has-value': 'Already answered',
+                'already-selected': 'Already selected',
+                'blocked-by-form-filter': 'Skipped by form selection',
+                'button-input': 'Button input ignored',
+                'custom-combobox-input': 'React/custom combobox',
+                disabled: 'Disabled control',
+                'file-input': 'File input handled separately',
+                'hidden-input': 'Hidden field ignored',
+                'input-value-did-not-stick': 'Value did not stick',
+                'missing-element': 'Field not available',
+                'missing-fill-value': 'No saved answer available',
+                'missing-input': 'Input not found',
+                readonly: 'Read-only field',
+                'select-value-did-not-stick': 'Selection did not stick',
+                'selected-option': 'Selected option applied',
+                'submit-input': 'Submit control ignored',
+                'text-mapping': 'Text fill',
+                'user-canceled-confirm-before-fill': 'Canceled before fill',
+                'value-applied': 'Answer applied'
+            };
+
+            if (labels[reason]) {
+                return labels[reason];
+            }
+
+            return String(reason || '')
+                .replace(/[-_]+/g, ' ')
+                .replace(/\b\w/g, char => char.toUpperCase());
+        },
+
+        getHoverStatusConfig(status) {
+            switch (status) {
+                case 'completed':
+                    return { marker: '✓', label: 'Completed', className: 'is-completed', summaryKey: 'answered', order: 0 };
+                case 'already-completed':
+                    return { marker: '✓', label: 'Already answered', className: 'is-answered', summaryKey: 'answered', order: 1 };
+                case 'error':
+                    return { marker: '!', label: 'Error', className: 'is-error', summaryKey: 'needsReview', order: 2 };
+                case 'skipped':
+                    return { marker: '-', label: 'Skipped', className: 'is-skipped', summaryKey: 'skipped', order: 3 };
+                default:
+                    return { marker: '•', label: 'Needs review', className: 'is-pending', summaryKey: 'needsReview', order: 4 };
+            }
+        },
+
+        getHoverItemKey(data = {}) {
+            const stableQuestion = this.normalizeText(data.question || data.label || data.placeholder || '');
+            const stableIdentity = this.normalizeText(data.name || data.id || '');
+            const stableFieldType = String(data.fieldType || '').trim().toLowerCase();
+            const stableElement = String(data.element || data.descriptor || '').trim().toLowerCase();
+
+            if (stableQuestion) {
+                return stableQuestion;
+            }
+
+            if (stableFieldType && stableIdentity) {
+                return `${stableFieldType}|${stableIdentity}`;
+            }
+
+            return [stableFieldType, stableElement, stableIdentity].join('|');
+        },
+
+        buildHoverItemTitle(data = {}) {
+            return [
+                data.question,
+                data.label,
+                data.placeholder,
+                data.name,
+                data.id,
+                data.element
+            ].find(value => typeof value === 'string' && value.trim()) || this.getFieldTypeLabel(data.fieldType);
+        },
+
+        upsertHoverItem(itemMap, nextItem) {
+            const key = this.getHoverItemKey(nextItem);
+            const existing = itemMap.get(key);
+            const nextOrder = this.getHoverStatusConfig(nextItem.status).order;
+
+            if (!existing) {
+                itemMap.set(key, {
+                    ...nextItem,
+                    key,
+                    order: nextOrder
+                });
+                return;
+            }
+
+            const shouldReplaceStatus = nextOrder <= existing.order;
+            const nextIsCustomControl = nextItem.controlKind === 'custom-combobox';
+            const existingIsCustomControl = existing.controlKind === 'custom-combobox';
+            const shouldPreferNextTitle = Boolean(nextItem.title) && (
+                !existing.title ||
+                existing.title === existing.displayName ||
+                (nextIsCustomControl && !existingIsCustomControl)
+            );
+            const shouldPreferNextFieldType = Boolean(nextItem.fieldType) && (
+                !existing.fieldType ||
+                existing.fieldType === 'unknown' ||
+                (existing.fieldType === 'city' && nextItem.fieldType !== 'city' && nextIsCustomControl)
+            );
+            const shouldPreferNextControl = nextIsCustomControl && !existingIsCustomControl;
+
+            itemMap.set(key, {
+                ...existing,
+                fieldType: shouldPreferNextFieldType ? nextItem.fieldType : (existing.fieldType || nextItem.fieldType),
+                displayName: shouldPreferNextFieldType ? nextItem.displayName : (existing.displayName || nextItem.displayName),
+                title: shouldPreferNextTitle ? nextItem.title : (existing.title || nextItem.title),
+                detail: shouldReplaceStatus ? (nextItem.detail || existing.detail) : (existing.detail || nextItem.detail),
+                element: shouldPreferNextControl ? nextItem.element : (existing.element || nextItem.element),
+                label: shouldPreferNextTitle ? (nextItem.label || existing.label) : (existing.label || nextItem.label),
+                question: shouldPreferNextTitle ? (nextItem.question || existing.question) : (existing.question || nextItem.question),
+                name: shouldPreferNextFieldType ? (nextItem.name || existing.name) : (existing.name || nextItem.name),
+                id: shouldPreferNextFieldType ? (nextItem.id || existing.id) : (existing.id || nextItem.id),
+                placeholder: shouldPreferNextTitle ? (nextItem.placeholder || existing.placeholder) : (existing.placeholder || nextItem.placeholder),
+                currentValue: existing.currentValue || nextItem.currentValue,
+                isRequired: existing.isRequired || nextItem.isRequired,
+                controlKind: shouldPreferNextControl ? nextItem.controlKind : (existing.controlKind || nextItem.controlKind),
+                status: shouldReplaceStatus ? nextItem.status : existing.status,
+                order: shouldReplaceStatus ? nextOrder : existing.order
+            });
+        },
+
+        createHoverItem(data = {}, status = 'pending', detail = '') {
+            return {
+                fieldType: data.fieldType || 'unknown',
+                displayName: this.getFieldTypeLabel(data.fieldType),
+                title: this.buildHoverItemTitle(data),
+                detail,
+                element: data.element || data.descriptor || '',
+                label: data.label || '',
+                question: data.question || '',
+                name: data.name || '',
+                id: data.id || '',
+                placeholder: data.placeholder || '',
+                currentValue: data.currentValue || '',
+                isRequired: Boolean(data.isRequired),
+                controlKind: data.controlKind || '',
+                status
+            };
+        },
+
+        buildHoverSnapshot(report = null) {
+            const detectionReport = report || FieldDetector.detectFields({ includeDiagnostics: true });
+            const itemMap = new Map();
+            const detectedFieldTypes = new Set(
+                (detectionReport.detected || []).map(item => item.fieldType).filter(Boolean)
+            );
+            const customDetectedFieldTypes = new Set(
+                (detectionReport.detected || [])
+                    .filter(item => item.context?.controlKind === 'custom-combobox')
+                    .map(item => item.fieldType)
+                    .filter(Boolean)
+            );
+
+            (detectionReport.detected || []).forEach(item => {
+                const inferredFieldType = item.context?.controlKind === 'custom-combobox'
+                    ? this.inferStructuredChoiceFieldType(item.context?.questionText, item.context?.labelText, item.context?.placeholder)
+                    : null;
+                const normalizedFieldType = inferredFieldType || item.fieldType;
+                const detailParts = [];
+                if (item.context?.controlKind === 'custom-combobox') {
+                    detailParts.push('React/custom control');
+                }
+                if (item.matchedBy) {
+                    detailParts.push(`Detected via ${this.humanizeReason(item.matchedBy).toLowerCase()}`);
+                }
+                if (item.context?.isRequired) {
+                    detailParts.push('required');
+                }
+                const status = item.context?.currentValue ? 'already-completed' : 'pending';
+                this.upsertHoverItem(itemMap, this.createHoverItem({
+                    fieldType: normalizedFieldType,
+                    element: item.context?.descriptor,
+                    label: item.context?.labelText,
+                    question: item.context?.questionText,
+                    name: item.context?.name,
+                    id: item.context?.id,
+                    placeholder: item.context?.placeholder,
+                    currentValue: item.context?.currentValue,
+                    isRequired: item.context?.isRequired,
+                    controlKind: item.context?.controlKind
+                }, status, detailParts.join(' • ')));
+            });
+
+            const events = this.debugSession?.events || [];
+            events.forEach(event => {
+                if (!(event.fieldType || event.element || event.label || event.question || event.name || event.id)) {
+                    return;
+                }
+
+                if (!event.element && !event.label && !event.question) {
+                    return;
+                }
+
+                if (event.stage === 'select-mapping' || event.stage === 'text-mapping') {
+                    return;
+                }
+
+                if (
+                    event.reason === 'field-type-not-detected' ||
+                    event.reason === 'already-attempted-this-run' ||
+                    event.reason === 'already-answered' ||
+                    event.reason === 'already-selected' ||
+                    event.reason === 'already-has-value'
+                ) {
+                    return;
+                }
+
+                if (
+                    event.stage === 'targeted-dropdown' &&
+                    event.outcome === 'skipped' &&
+                    event.reason === 'no-matching-dropdown-control-found'
+                ) {
+                    return;
+                }
+
+                const isMappingOnlySkip = event.outcome === 'skipped' && (
+                    event.stage === 'select-mapping' || event.stage === 'text-mapping'
+                );
+                if (isMappingOnlySkip && (detectedFieldTypes.has(event.fieldType) || customDetectedFieldTypes.has(event.fieldType))) {
+                    return;
+                }
+
+                let status = null;
+                if (event.outcome === 'filled') {
+                    status = 'completed';
+                } else if (event.outcome === 'error') {
+                    status = 'error';
+                } else if (event.outcome === 'skipped') {
+                    status = event.reason === 'already-has-value' || event.reason === 'already-selected'
+                        ? 'already-completed'
+                        : 'skipped';
+                }
+
+                if (!status) {
+                    return;
+                }
+
+                const inferredFieldType = event.controlKind === 'custom-combobox'
+                    ? this.inferStructuredChoiceFieldType(event.question, event.label)
+                    : null;
+
+                const detail = [
+                    event.stage ? this.humanizeReason(event.stage) : '',
+                    event.reason ? this.humanizeReason(event.reason) : ''
+                ].filter(Boolean).join(' • ');
+
+                this.upsertHoverItem(itemMap, this.createHoverItem({
+                    fieldType: inferredFieldType || event.fieldType,
+                    element: event.element,
+                    label: event.label,
+                    question: event.question,
+                    name: event.name,
+                    id: event.id,
+                    currentValue: event.currentValue,
+                    controlKind: event.controlKind
+                }, status, detail));
+            });
+
+            const items = Array.from(itemMap.values()).sort((left, right) => {
+                if (left.order !== right.order) {
+                    return left.order - right.order;
+                }
+                return left.displayName.localeCompare(right.displayName) || left.title.localeCompare(right.title);
+            });
+
+            const summary = items.reduce((counts, item) => {
+                counts.detected += 1;
+                const summaryKey = this.getHoverStatusConfig(item.status).summaryKey;
+                counts[summaryKey] += 1;
+                return counts;
+            }, {
+                detected: 0,
+                answered: 0,
+                skipped: 0,
+                needsReview: 0
+            });
+
+            return {
+                updatedAt: new Date().toISOString(),
+                summary,
+                items,
+                message: items.length
+                    ? 'Hover here to inspect detected fields and the latest autofill results.'
+                    : 'No supported fields detected yet.'
+            };
+        },
+
+        renderHoverPanel(snapshot = null) {
+            if (!this.floatingPanel) {
+                return;
+            }
+
+            const panelSnapshot = snapshot || this.lastStatusSnapshot || this.buildHoverSnapshot();
+            this.lastStatusSnapshot = panelSnapshot;
+
+            const summaryCards = [
+                { label: 'Detected', value: panelSnapshot.summary.detected },
+                { label: 'Answered', value: panelSnapshot.summary.answered },
+                { label: 'Skipped', value: panelSnapshot.summary.skipped },
+                { label: 'Needs review', value: panelSnapshot.summary.needsReview }
+            ].map(item => `
+                <div class="job-autofill-panel-stat">
+                    <span>${this.escapeHtml(item.label)}</span>
+                    <strong>${item.value}</strong>
+                </div>
+            `).join('');
+
+            const itemMarkup = panelSnapshot.items.length > 0
+                ? panelSnapshot.items.map(item => {
+                    const config = this.getHoverStatusConfig(item.status);
+                    return `
+                        <div class="job-autofill-panel-item ${config.className}">
+                            <div class="job-autofill-panel-marker">${this.escapeHtml(config.marker)}</div>
+                            <div class="job-autofill-panel-copy">
+                                <div class="job-autofill-panel-line">
+                                    <strong>${this.escapeHtml(item.displayName)}</strong>
+                                    <span class="job-autofill-panel-badge">${this.escapeHtml(config.label)}</span>
+                                </div>
+                                <div class="job-autofill-panel-title">${this.escapeHtml(item.title)}</div>
+                                ${item.detail ? `<div class="job-autofill-panel-detail">${this.escapeHtml(item.detail)}</div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('')
+                : `<div class="job-autofill-panel-empty">${this.escapeHtml(panelSnapshot.message)}</div>`;
+
+            this.floatingPanel.innerHTML = `
+                <div class="job-autofill-panel-header">
+                    <div>
+                        <strong>Autofill status</strong>
+                        <div class="job-autofill-panel-note">${this.escapeHtml(panelSnapshot.message)}</div>
+                    </div>
+                </div>
+                <div class="job-autofill-panel-summary">${summaryCards}</div>
+                <div class="job-autofill-panel-list">${itemMarkup}</div>
+            `;
+
+            this.syncDebugState();
+        },
+
+        openHoverPanel() {
+            if (!this.floatingWidget) {
+                return;
+            }
+
+            window.clearTimeout(this.hoverCloseTimer);
+            this.hoverCloseTimer = null;
+            this.renderHoverPanel(this.buildHoverSnapshot());
+            this.floatingWidget.classList.add('is-open');
+        },
+
+        syncHoverPanelVisibility() {
+            if (!this.floatingWidget) {
+                return;
+            }
+
+            const activeElement = document.activeElement;
+            const hasFocusWithin = Boolean(activeElement && this.floatingWidget.contains(activeElement));
+            const isHovered = this.floatingWidget.matches(':hover');
+
+            if (isHovered || hasFocusWithin) {
+                this.openHoverPanel();
+                return;
+            }
+
+            this.floatingWidget.classList.remove('is-open');
+        },
+
+        scheduleHoverPanelClose() {
+            if (!this.floatingWidget) {
+                return;
+            }
+
+            window.clearTimeout(this.hoverOpenTimer);
+            this.hoverOpenTimer = null;
+            window.clearTimeout(this.hoverCloseTimer);
+            this.hoverCloseTimer = window.setTimeout(() => {
+                this.syncHoverPanelVisibility();
+            }, 140);
         },
 
         recordDebugEvent(stage, outcome, data = {}) {
@@ -113,7 +567,9 @@
                 name: elementInfo.name,
                 id: elementInfo.id,
                 htmlType: elementInfo.inputType || elementInfo.tagName,
-                currentValue: elementInfo.currentValue
+                currentValue: elementInfo.currentValue,
+                isRequired: elementInfo.isRequired,
+                controlKind: elementInfo.controlKind
             };
 
             if (this.debugSession) {
@@ -152,7 +608,11 @@
                 label: item.context?.labelText || '',
                 question: item.context?.questionText || '',
                 name: item.context?.name || '',
-                id: item.context?.id || ''
+                id: item.context?.id || '',
+                placeholder: item.context?.placeholder || '',
+                currentValue: item.context?.currentValue || '',
+                isRequired: Boolean(item.context?.isRequired),
+                controlKind: item.context?.controlKind || item.context?.tagName || ''
             }));
             const unmatchedRows = (report.unmatched || []).map(item => ({
                 reason: item.reason,
@@ -161,7 +621,10 @@
                 question: item.context?.questionText || '',
                 name: item.context?.name || '',
                 id: item.context?.id || '',
-                placeholder: item.context?.placeholder || ''
+                placeholder: item.context?.placeholder || '',
+                currentValue: item.context?.currentValue || '',
+                isRequired: Boolean(item.context?.isRequired),
+                controlKind: item.context?.controlKind || item.context?.tagName || ''
             }));
             const skippedRows = (report.skipped || []).map(item => ({
                 reason: item.reason,
@@ -169,7 +632,11 @@
                 label: item.context?.labelText || '',
                 question: item.context?.questionText || '',
                 name: item.context?.name || '',
-                id: item.context?.id || ''
+                id: item.context?.id || '',
+                placeholder: item.context?.placeholder || '',
+                currentValue: item.context?.currentValue || '',
+                isRequired: Boolean(item.context?.isRequired),
+                controlKind: item.context?.controlKind || item.context?.tagName || ''
             }));
 
             if (this.debugSession) {
@@ -261,7 +728,13 @@
                     return;
                 }
 
-                if (changes[StorageKeys.USER_DATA] || changes[StorageKeys.RESUME] || changes[StorageKeys.SETTINGS]) {
+                if (
+                    changes[StorageKeys.USER_DATA] ||
+                    changes[StorageKeys.RESUME] ||
+                    changes[StorageKeys.RESUME_PARSED] ||
+                    changes[StorageKeys.AI_ANSWER_CACHE] ||
+                    changes[StorageKeys.SETTINGS]
+                ) {
                     this.refreshRuntimeState().catch(error => {
                         console.error('[JobAutofill] Failed to refresh runtime state after storage update:', error);
                     });
@@ -300,6 +773,20 @@
                 this.mutationObserver = null;
             }
 
+            window.clearTimeout(this.hoverOpenTimer);
+            window.clearTimeout(this.hoverCloseTimer);
+            window.clearTimeout(this.floatingButtonResetTimer);
+            this.hoverOpenTimer = null;
+            this.hoverCloseTimer = null;
+            this.floatingButtonResetTimer = null;
+
+            if (this.floatingWidget?.isConnected) {
+                this.floatingWidget.remove();
+            }
+            this.floatingWidget = null;
+            this.floatingButton = null;
+            this.floatingPanel = null;
+
             if (this.unloadHandler) {
                 window.removeEventListener('pagehide', this.unloadHandler);
                 this.unloadHandler = null;
@@ -329,9 +816,16 @@
                     console.warn('[JobAutofill] Chrome storage not available');
                     return;
                 }
-                const result = await chrome.storage.local.get([StorageKeys.USER_DATA, StorageKeys.RESUME]);
+                const result = await chrome.storage.local.get([
+                    StorageKeys.USER_DATA,
+                    StorageKeys.RESUME,
+                    StorageKeys.RESUME_PARSED,
+                    StorageKeys.AI_ANSWER_CACHE
+                ]);
                 this.userData = result[StorageKeys.USER_DATA] || null;
                 this.resumeData = result[StorageKeys.RESUME] || null;
+                this.parsedResumeData = result[StorageKeys.RESUME_PARSED] || null;
+                this.aiAnswerCache = result[StorageKeys.AI_ANSWER_CACHE] || {};
             } catch (error) {
                 // Extension context may have been invalidated - this is normal after reload
                 if (error.message?.includes('Extension context invalidated')) {
@@ -487,65 +981,113 @@
          * Add floating autofill button to the page
          */
         addFloatingButton() {
-            // Don't add if already exists
-            if (document.getElementById('job-autofill-btn')) return;
+                        if (this.floatingWidget?.isConnected) {
+                                return;
+                        }
 
-            const button = document.createElement('button');
-            button.id = 'job-autofill-btn';
-            button.innerHTML = `
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-          <path d="M20 6H16V4C16 2.89 15.11 2 14 2H10C8.89 2 8 2.89 8 4V6H4C2.89 6 2 6.89 2 8V19C2 20.11 2.89 21 4 21H20C21.11 21 22 20.11 22 19V8C22 6.89 21.11 6 20 6ZM10 4H14V6H10V4ZM20 19H4V8H20V19Z" fill="currentColor"/>
-          <path d="M13 10H11V13H8V15H11V18H13V15H16V13H13V10Z" fill="currentColor"/>
-        </svg>
-        <span>Autofill</span>
-      `;
-            button.title = 'Fill job application form';
+                        const widget = document.createElement('div');
+                        widget.id = 'job-autofill-widget';
 
-            button.addEventListener('click', async () => {
-                button.disabled = true;
-                button.classList.remove('job-autofill-btn--success', 'job-autofill-btn--error');
-                button.innerHTML = `
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="spin">
-            <path d="M12 4V1L8 5L12 9V6C15.31 6 18 8.69 18 12C18 13.01 17.75 13.97 17.3 14.8L18.76 16.26C19.54 15.03 20 13.57 20 12C20 7.58 16.42 4 12 4Z" fill="currentColor"/>
-            <path d="M12 18C8.69 18 6 15.31 6 12C6 10.99 6.25 10.03 6.7 9.2L5.24 7.74C4.46 8.97 4 10.43 4 12C4 16.42 7.58 20 12 20V23L16 19L12 15V18Z" fill="currentColor"/>
-          </svg>
-          <span>Filling...</span>
-        `;
+                        const panel = document.createElement('div');
+                        panel.id = 'job-autofill-panel';
+                        panel.setAttribute('aria-live', 'polite');
 
-                const result = await this.performAutofill();
+                        const button = document.createElement('button');
+                        button.id = 'job-autofill-btn';
+                        button.type = 'button';
+                        button.title = 'Fill job application form';
+                        button.innerHTML = `
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                    <path d="M20 6H16V4C16 2.89 15.11 2 14 2H10C8.89 2 8 2.89 8 4V6H4C2.89 6 2 6.89 2 8V19C2 20.11 2.89 21 4 21H20C21.11 21 22 20.11 22 19V8C22 6.89 21.11 6 20 6ZM10 4H14V6H10V4ZM20 19H4V8H20V19Z" fill="currentColor"/>
+                    <path d="M13 10H11V13H8V15H11V18H13V15H16V13H13V10Z" fill="currentColor"/>
+                </svg>
+                <span>Autofill</span>
+            `;
 
-                if (result.success) {
-                    button.innerHTML = `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z" fill="currentColor"/>
-            </svg>
-            <span>Done!</span>
-          `;
-                    button.classList.add('job-autofill-btn--success');
-                } else {
-                    button.innerHTML = `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor"/>
-            </svg>
-            <span>Error</span>
-          `;
-                    button.classList.add('job-autofill-btn--error');
-                }
+                        button.addEventListener('click', async () => {
+                                button.disabled = true;
+                                window.clearTimeout(this.floatingButtonResetTimer);
+                                button.classList.remove('job-autofill-btn--success', 'job-autofill-btn--error');
+                                button.innerHTML = `
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" class="spin">
+                        <path d="M12 4V1L8 5L12 9V6C15.31 6 18 8.69 18 12C18 13.01 17.75 13.97 17.3 14.8L18.76 16.26C19.54 15.03 20 13.57 20 12C20 7.58 16.42 4 12 4Z" fill="currentColor"/>
+                        <path d="M12 18C8.69 18 6 15.31 6 12C6 10.99 6.25 10.03 6.7 9.2L5.24 7.74C4.46 8.97 4 10.43 4 12C4 16.42 7.58 20 12 20V23L16 19L12 15V18Z" fill="currentColor"/>
+                    </svg>
+                    <span>Filling...</span>
+                `;
 
-                setTimeout(() => {
-                    button.disabled = false;
-                    button.classList.remove('job-autofill-btn--success', 'job-autofill-btn--error');
-                    button.innerHTML = `
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-              <path d="M20 6H16V4C16 2.89 15.11 2 14 2H10C8.89 2 8 2.89 8 4V6H4C2.89 6 2 6.89 2 8V19C2 20.11 2.89 21 4 21H20C21.11 21 22 20.11 22 19V8C22 6.89 21.11 6 20 6ZM10 4H14V6H10V4ZM20 19H4V8H20V19Z" fill="currentColor"/>
-              <path d="M13 10H11V13H8V15H11V18H13V15H16V13H13V10Z" fill="currentColor"/>
-            </svg>
-            <span>Autofill</span>
-          `;
-                }, 3000);
-            });
+                                const result = await this.performAutofill();
+                                this.renderHoverPanel(this.buildHoverSnapshot());
+                                this.syncHoverPanelVisibility();
 
-            document.body.appendChild(button);
+                                if (result.success) {
+                                        button.innerHTML = `
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                            <path d="M9 16.17L4.83 12L3.41 13.41L9 19L21 7L19.59 5.59L9 16.17Z" fill="currentColor"/>
+                        </svg>
+                        <span>Done!</span>
+                    `;
+                                        button.classList.add('job-autofill-btn--success');
+                                } else {
+                                        button.innerHTML = `
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor"/>
+                        </svg>
+                        <span>Error</span>
+                    `;
+                                        button.classList.add('job-autofill-btn--error');
+                                }
+
+                                this.floatingButtonResetTimer = window.setTimeout(() => {
+                                        button.disabled = false;
+                                        button.classList.remove('job-autofill-btn--success', 'job-autofill-btn--error');
+                                        button.innerHTML = `
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                            <path d="M20 6H16V4C16 2.89 15.11 2 14 2H10C8.89 2 8 2.89 8 4V6H4C2.89 6 2 6.89 2 8V19C2 20.11 2.89 21 4 21H20C21.11 21 22 20.11 22 19V8C22 6.89 21.11 6 20 6ZM10 4H14V6H10V4ZM20 19H4V8H20V19Z" fill="currentColor"/>
+                            <path d="M13 10H11V13H8V15H11V18H13V15H16V13H13V10Z" fill="currentColor"/>
+                        </svg>
+                        <span>Autofill</span>
+                    `;
+                                        this.syncHoverPanelVisibility();
+                                }, 3000);
+                        });
+
+                        widget.addEventListener('mouseenter', () => {
+                                window.clearTimeout(this.hoverOpenTimer);
+                                this.hoverOpenTimer = window.setTimeout(() => {
+                                        this.openHoverPanel();
+                                }, 40);
+                        });
+
+                                widget.addEventListener('pointerenter', () => {
+                                    window.clearTimeout(this.hoverOpenTimer);
+                                    this.openHoverPanel();
+                                });
+
+                        widget.addEventListener('mouseleave', () => {
+                                this.scheduleHoverPanelClose();
+                        });
+
+                                widget.addEventListener('pointerleave', () => {
+                                    this.scheduleHoverPanelClose();
+                                });
+
+                        widget.addEventListener('focusin', () => {
+                                this.openHoverPanel();
+                        });
+
+                        widget.addEventListener('focusout', () => {
+                                this.scheduleHoverPanelClose();
+                        });
+
+                        widget.appendChild(panel);
+                        widget.appendChild(button);
+                        document.body.appendChild(widget);
+
+                        this.floatingWidget = widget;
+                        this.floatingButton = button;
+                        this.floatingPanel = panel;
+                        this.renderHoverPanel(this.buildHoverSnapshot());
         },
 
         /**
@@ -914,6 +1456,16 @@
                 }
 
                 for (const input of detectedFields[fieldType]) {
+                    if (FieldDetector.isCustomComboboxInput(input)) {
+                        this.recordDebugEvent('text-mapping', 'skipped', {
+                            fieldType,
+                            element: input,
+                            reason: 'custom-combobox-input',
+                            source: 'profile'
+                        });
+                        continue;
+                    }
+
                     // Special handling for city fields - check if they actually want city + state
                     let valueToFill = value;
                     if (fieldType === 'city') {
@@ -931,9 +1483,188 @@
             this.fillCombinedLocationFields();
         },
 
+        getParsedResumeSections() {
+            if (!this.settings?.aiAssist?.useParsedResumeData || !this.parsedResumeData) {
+                return null;
+            }
+
+            const sections = {
+                resumeSummary: typeof this.parsedResumeData.resumeSummary === 'string'
+                    ? this.parsedResumeData.resumeSummary.trim()
+                    : '',
+                skills: Array.isArray(this.parsedResumeData.skills)
+                    ? this.parsedResumeData.skills.filter(Boolean)
+                    : [],
+                experienceHighlights: Array.isArray(this.parsedResumeData.experienceHighlights)
+                    ? this.parsedResumeData.experienceHighlights.filter(Boolean)
+                    : [],
+                educationHighlights: Array.isArray(this.parsedResumeData.educationHighlights)
+                    ? this.parsedResumeData.educationHighlights.filter(Boolean)
+                    : [],
+                certifications: Array.isArray(this.parsedResumeData.certifications)
+                    ? this.parsedResumeData.certifications.filter(Boolean)
+                    : [],
+                projects: Array.isArray(this.parsedResumeData.projects)
+                    ? this.parsedResumeData.projects.filter(Boolean)
+                    : []
+            };
+
+            const hasContent = Object.values(sections).some(value => Array.isArray(value) ? value.length > 0 : Boolean(value));
+            return hasContent ? sections : null;
+        },
+
+        buildResumeContextText() {
+            const sections = this.getParsedResumeSections();
+            if (!sections) {
+                return '';
+            }
+
+            return [
+                sections.resumeSummary ? `Resume summary:\n${sections.resumeSummary}` : '',
+                sections.skills.length ? `Skills:\n- ${sections.skills.join('\n- ')}` : '',
+                sections.experienceHighlights.length ? `Experience highlights:\n- ${sections.experienceHighlights.join('\n- ')}` : '',
+                sections.educationHighlights.length ? `Education highlights:\n- ${sections.educationHighlights.join('\n- ')}` : '',
+                sections.certifications.length ? `Certifications:\n- ${sections.certifications.join('\n- ')}` : '',
+                sections.projects.length ? `Projects:\n- ${sections.projects.join('\n- ')}` : ''
+            ].filter(Boolean).join('\n\n');
+        },
+
+        computeAiAnswerCacheKey(payload) {
+            const normalizedPayload = {
+                question: (payload?.question || '').trim(),
+                fieldLabel: (payload?.fieldLabel || '').trim(),
+                helperText: (payload?.helperText || '').trim(),
+                sectionContext: (payload?.sectionContext || '').trim(),
+                detectedFieldType: (payload?.detectedFieldType || '').trim(),
+                preferredProfileAnswer: (payload?.preferredProfileAnswer || '').trim(),
+                fieldHtmlType: (payload?.fieldHtmlType || '').trim(),
+                pageTitle: (payload?.pageTitle || '').trim(),
+                jobPostingText: (payload?.jobPostingText || '').trim(),
+                resumeContext: (payload?.resumeContext || '').trim(),
+                choiceOptions: Array.isArray(payload?.choiceOptions)
+                    ? payload.choiceOptions.map(option => String(option || '').trim()).filter(Boolean)
+                    : [],
+                userProfile: payload?.userProfile || {}
+            };
+            const serialized = JSON.stringify(normalizedPayload);
+            let hash = 0;
+
+            for (let index = 0; index < serialized.length; index += 1) {
+                hash = ((hash << 5) - hash + serialized.charCodeAt(index)) | 0;
+            }
+
+            return `ai:${(hash >>> 0).toString(16)}:${serialized.length}`;
+        },
+
+        getCachedAiAnswer(cacheKey) {
+            if (!cacheKey) {
+                return null;
+            }
+
+            const sessionEntry = this.sessionAnswerCache.get(cacheKey);
+            if (sessionEntry?.answer) {
+                return {
+                    ...sessionEntry,
+                    cacheSource: 'session'
+                };
+            }
+
+            const persistentEntry = this.aiAnswerCache?.[cacheKey];
+            if (persistentEntry?.answer) {
+                this.sessionAnswerCache.set(cacheKey, persistentEntry);
+                return {
+                    ...persistentEntry,
+                    cacheSource: 'persistent'
+                };
+            }
+
+            return null;
+        },
+
+        async persistAiAnswer(cacheKey, payload, answer) {
+            const sanitizedAnswer = typeof answer === 'string' ? answer.trim() : '';
+            if (!cacheKey || !sanitizedAnswer) {
+                return;
+            }
+
+            const entry = {
+                answer: sanitizedAnswer,
+                question: (payload?.question || '').trim(),
+                fieldLabel: (payload?.fieldLabel || '').trim(),
+                fieldHtmlType: (payload?.fieldHtmlType || '').trim(),
+                updatedAt: new Date().toISOString()
+            };
+
+            this.sessionAnswerCache.set(cacheKey, entry);
+
+            if (!this.settings?.aiAssist?.cacheAnswers || typeof Storage?.setAiAnswerCacheEntry !== 'function') {
+                return;
+            }
+
+            await Storage.setAiAnswerCacheEntry(cacheKey, entry);
+            this.aiAnswerCache = {
+                ...(this.aiAnswerCache || {}),
+                [cacheKey]: entry
+            };
+        },
+
+        async requestAiAnswer(payload, debugMeta = {}) {
+            const enrichedPayload = {
+                ...payload,
+                userProfile: payload?.userProfile || this.buildAiUserProfile(),
+                resumeContext: typeof payload?.resumeContext === 'string'
+                    ? payload.resumeContext.trim()
+                    : this.buildResumeContextText()
+            };
+            const cacheKey = this.computeAiAnswerCacheKey(enrichedPayload);
+            const cachedEntry = this.getCachedAiAnswer(cacheKey);
+
+            if (cachedEntry) {
+                this.recordDebugEvent('ai-answer-cache', 'filled', {
+                    fieldType: debugMeta.fieldType || '',
+                    element: debugMeta.element,
+                    reason: `${cachedEntry.cacheSource}-cache-hit`,
+                    source: 'ai-cache',
+                    value: cachedEntry.answer.slice(0, 160)
+                });
+
+                return {
+                    success: true,
+                    answer: cachedEntry.answer,
+                    model: cachedEntry.model || '',
+                    cacheSource: cachedEntry.cacheSource
+                };
+            }
+
+            if (!this.settings?.aiAssist?.enabled) {
+                return {
+                    success: false,
+                    error: 'AI assistance is disabled in settings.'
+                };
+            }
+
+            if (!this.settings?.aiAssist?.apiKey) {
+                return {
+                    success: false,
+                    error: 'Missing Mistral API key. Add it in Settings > AI Assistance.'
+                };
+            }
+
+            const response = await chrome.runtime.sendMessage({
+                action: 'generateAiAnswer',
+                payload: enrichedPayload
+            });
+
+            if (response?.success && response.answer) {
+                await this.persistAiAnswer(cacheKey, enrichedPayload, response.answer);
+            }
+
+            return response;
+        },
+
         async fillAiTextQuestions(detectedFields) {
             const aiSettings = this.settings?.aiAssist;
-            if (!aiSettings?.enabled || !aiSettings?.apiKey) {
+            if (!aiSettings?.enabled) {
                 return;
             }
 
@@ -944,25 +1675,24 @@
 
             console.log(`[JobAutofill] Found ${candidates.length} AI text question candidates`);
 
-            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 3, candidates.length));
+            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 10, candidates.length));
             const jobPostingText = this.extractJobPostingText();
             const pageTitle = document.title || '';
 
             for (const candidate of candidates.slice(0, limit)) {
                 try {
                     console.log(`[JobAutofill] Generating AI answer for: ${candidate.question}`);
-                    const response = await chrome.runtime.sendMessage({
-                        action: 'generateAiAnswer',
-                        payload: {
-                            question: candidate.question,
-                            fieldLabel: candidate.label,
-                            helperText: candidate.helperText,
-                            sectionContext: candidate.sectionContext,
-                            fieldHtmlType: candidate.input instanceof HTMLTextAreaElement ? 'textarea' : 'text',
-                            pageTitle,
-                            jobPostingText,
-                            userProfile: this.buildAiUserProfile()
-                        }
+                    const response = await this.requestAiAnswer({
+                        question: candidate.question,
+                        fieldLabel: candidate.label,
+                        helperText: candidate.helperText,
+                        sectionContext: candidate.sectionContext,
+                        fieldHtmlType: candidate.input instanceof HTMLTextAreaElement ? 'textarea' : 'text',
+                        pageTitle,
+                        jobPostingText
+                    }, {
+                        fieldType: 'aiTextQuestion',
+                        element: candidate.input
                     });
 
                     if (!response?.success || !response.answer) {
@@ -983,7 +1713,7 @@
         },
 
         buildAiUserProfile() {
-            return {
+            const profile = {
                 fullName: this.userData?.fullName || '',
                 firstName: this.parseFirstName(this.userData?.fullName || ''),
                 email: this.userData?.email || '',
@@ -1002,6 +1732,18 @@
                 veteran: this.userData?.veteran || '',
                 disability: this.userData?.disability || ''
             };
+            const parsedResumeSections = this.getParsedResumeSections();
+
+            if (parsedResumeSections) {
+                profile.resumeSummary = parsedResumeSections.resumeSummary;
+                profile.skills = parsedResumeSections.skills;
+                profile.experienceHighlights = parsedResumeSections.experienceHighlights;
+                profile.educationHighlights = parsedResumeSections.educationHighlights;
+                profile.certifications = parsedResumeSections.certifications;
+                profile.projects = parsedResumeSections.projects;
+            }
+
+            return profile;
         },
 
         getStructuredChoiceFieldMappings() {
@@ -1050,7 +1792,14 @@
                 return null;
             }
 
-            for (const fieldType of Object.keys(this.getStructuredChoiceFieldMappings())) {
+            const inferableFieldTypes = [
+                ...Object.keys(this.getStructuredChoiceFieldMappings()),
+                'city',
+                'state',
+                'location'
+            ];
+
+            for (const fieldType of inferableFieldTypes) {
                 if (binaryFieldType && fieldType === binaryFieldType) {
                     return fieldType;
                 }
@@ -1159,13 +1908,225 @@
             return bestScore > 0 ? bestMatch : null;
         },
 
+        getStructuredChoiceAliases(fieldType, userValue) {
+            const aliases = new Set();
+            if (!fieldType || !userValue) {
+                return [];
+            }
+
+            aliases.add(userValue);
+
+            if (fieldType === 'hispanicLatino') {
+                if (userValue === 'yes') {
+                    aliases.add('yes i am hispanic or latino');
+                    aliases.add('yes i identify as hispanic or latino');
+                    aliases.add('hispanic or latino');
+                } else if (userValue === 'no') {
+                    aliases.add('no i am not hispanic or latino');
+                    aliases.add('not hispanic or latino');
+                    aliases.add('not hispanic latino');
+                } else if (userValue === 'decline') {
+                    aliases.add('decline to self identify');
+                    aliases.add('prefer not to answer');
+                    aliases.add('i do not wish to answer');
+                    aliases.add('i don t wish to answer');
+                }
+            }
+
+            if (fieldType === 'veteran') {
+                if (userValue === 'not_veteran') {
+                    aliases.add('i am not a protected veteran');
+                    aliases.add('not a protected veteran');
+                    aliases.add('not protected veteran');
+                } else if (userValue === 'disabled_veteran') {
+                    aliases.add('disabled protected veteran');
+                    aliases.add('i identify as one or more of the classifications of a protected veteran');
+                } else if (userValue === 'recently_separated') {
+                    aliases.add('recently separated veteran');
+                } else if (userValue === 'active_wartime') {
+                    aliases.add('active duty wartime or campaign badge veteran');
+                    aliases.add('active duty wartime veteran');
+                } else if (userValue === 'armed_forces') {
+                    aliases.add('armed forces service medal veteran');
+                } else if (userValue === 'decline') {
+                    aliases.add('decline to self identify');
+                    aliases.add('prefer not to answer');
+                    aliases.add('i do not wish to answer');
+                    aliases.add('i don t wish to answer');
+                }
+            }
+
+            if (fieldType === 'disability') {
+                if (userValue === 'yes') {
+                    aliases.add('yes i have a disability');
+                    aliases.add('have a disability');
+                    aliases.add('yes i have a disability or have a history record of having a disability');
+                } else if (userValue === 'no') {
+                    aliases.add('no i do not have a disability');
+                    aliases.add('no i don t have a disability');
+                    aliases.add('i do not have a disability');
+                    aliases.add('i don t have a disability');
+                    aliases.add('do not have a disability');
+                } else if (userValue === 'decline') {
+                    aliases.add('decline to self identify');
+                    aliases.add('prefer not to answer');
+                    aliases.add('i do not wish to answer');
+                    aliases.add('i don t wish to answer');
+                }
+            }
+
+            return Array.from(aliases).map(alias => this.normalizeText(alias)).filter(Boolean);
+        },
+
+        getStructuredChoicePolarity(fieldType, optionText) {
+            const normalizedOptionText = this.normalizeText(optionText);
+            if (!fieldType || !normalizedOptionText) {
+                return null;
+            }
+
+            const isDecline =
+                normalizedOptionText.includes('decline') ||
+                normalizedOptionText.includes('prefer not') ||
+                normalizedOptionText.includes('choose not') ||
+                normalizedOptionText.includes('do not wish to answer') ||
+                normalizedOptionText.includes('don t wish to answer') ||
+                normalizedOptionText.includes('wish not to answer');
+
+            if (isDecline) {
+                return 'decline';
+            }
+
+            if (fieldType === 'hispanicLatino') {
+                if (
+                    normalizedOptionText.startsWith('no') ||
+                    normalizedOptionText.includes('not hispanic') ||
+                    normalizedOptionText.includes('not latino') ||
+                    normalizedOptionText.includes('not latina') ||
+                    normalizedOptionText.includes('not latinx')
+                ) {
+                    return 'no';
+                }
+
+                if (
+                    normalizedOptionText.startsWith('yes') ||
+                    normalizedOptionText.includes('identify as hispanic') ||
+                    normalizedOptionText.includes('identify as latino') ||
+                    normalizedOptionText.includes('hispanic or latino') ||
+                    normalizedOptionText === 'hispanic' ||
+                    normalizedOptionText === 'latino'
+                ) {
+                    return 'yes';
+                }
+            }
+
+            if (fieldType === 'disability') {
+                if (
+                    normalizedOptionText.startsWith('no') ||
+                    normalizedOptionText.includes('do not have a disability') ||
+                    normalizedOptionText.includes('don t have a disability') ||
+                    normalizedOptionText.includes('do not have a history') ||
+                    normalizedOptionText.includes('don t have a history')
+                ) {
+                    return 'no';
+                }
+
+                if (
+                    normalizedOptionText.startsWith('yes') ||
+                    (normalizedOptionText.includes('have a disability') && !normalizedOptionText.includes('do not') && !normalizedOptionText.includes('don t')) ||
+                    normalizedOptionText.includes('history record of having a disability')
+                ) {
+                    return 'yes';
+                }
+            }
+
+            return null;
+        },
+
+        findStructuredChoiceOption(options, fieldType, userValue, optionPatterns) {
+            if (!Array.isArray(options) || options.length === 0 || !fieldType || !userValue) {
+                return this.findProfileChoiceOption(options, userValue, optionPatterns);
+            }
+
+            const preferredTerms = new Set([
+                ...this.getStructuredChoiceAliases(fieldType, userValue),
+                ...((optionPatterns?.[userValue] || []).map(pattern => this.normalizeText(pattern)).filter(Boolean))
+            ]);
+            const oppositeTerms = new Set(
+                Object.keys(optionPatterns || {})
+                    .filter(key => key !== userValue)
+                    .flatMap(key => [
+                        ...this.getStructuredChoiceAliases(fieldType, key),
+                        ...((optionPatterns?.[key] || []).map(pattern => this.normalizeText(pattern)).filter(Boolean))
+                    ])
+                    .filter(Boolean)
+            );
+
+            let bestMatch = null;
+            let bestScore = -1;
+
+            for (const option of options) {
+                const optionText = option?.text || option?.textContent || option?.value || '';
+                const normalizedOptionText = this.normalizeText(optionText);
+                if (!normalizedOptionText) continue;
+
+                let score = 0;
+                const polarity = this.getStructuredChoicePolarity(fieldType, normalizedOptionText);
+
+                for (const term of preferredTerms) {
+                    if (!term) continue;
+                    if (normalizedOptionText === term) {
+                        score += 90;
+                    } else if (FieldDetector.containsNormalizedPhrase(normalizedOptionText, term)) {
+                        score += 55;
+                    }
+                }
+
+                for (const term of oppositeTerms) {
+                    if (!term) continue;
+                    if (normalizedOptionText === term) {
+                        score -= 90;
+                    } else if (FieldDetector.containsNormalizedPhrase(normalizedOptionText, term)) {
+                        score -= 55;
+                    }
+                }
+
+                if (fieldType === 'veteran' && userValue === 'not_veteran' && normalizedOptionText.includes('not a protected veteran')) {
+                    score += 35;
+                }
+                if (fieldType === 'disability' && userValue === 'no' && (normalizedOptionText.includes('do not have a disability') || normalizedOptionText.includes('don t have a disability'))) {
+                    score += 35;
+                }
+                if (fieldType === 'hispanicLatino' && userValue === 'no' && normalizedOptionText.includes('not hispanic')) {
+                    score += 35;
+                }
+                if (userValue === 'decline' && (normalizedOptionText.includes('wish to answer') || normalizedOptionText.includes('prefer not') || normalizedOptionText.includes('decline'))) {
+                    score += 35;
+                }
+
+                if (['hispanicLatino', 'disability'].includes(fieldType) && polarity) {
+                    if (polarity === userValue) {
+                        score += 160;
+                    } else {
+                        score -= 190;
+                    }
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = option;
+                }
+            }
+
+            return bestScore > 0 ? bestMatch : this.findProfileChoiceOption(options, userValue, optionPatterns);
+        },
+
         isOptionCompatibleWithProfileAnswer(option, fieldType, preferredProfileAnswer) {
             if (!fieldType || !preferredProfileAnswer || !option) {
                 return true;
             }
 
             const patterns = FieldDetector.patterns[fieldType]?.options || {};
-            return this.findProfileChoiceOption([option], preferredProfileAnswer, patterns) !== null;
+            return this.findStructuredChoiceOption([option], fieldType, preferredProfileAnswer, patterns) !== null;
         },
 
         async fillCustomComboboxFields() {
@@ -1269,61 +2230,77 @@
 
         async fillTargetedStructuredDropdowns() {
             const fieldTypes = ['gender', 'hispanicLatino', 'veteran', 'disability', 'race', 'phoneCountryCode'];
+            for (let pass = 0; pass < 3; pass += 1) {
+                let passProgress = false;
 
-            for (const fieldType of fieldTypes) {
-                const config = this.getStructuredChoiceConfig(fieldType);
-                if (!config?.value) {
-                    continue;
-                }
+                for (const fieldType of fieldTypes) {
+                    const config = this.getStructuredChoiceConfig(fieldType);
+                    if (!config?.value) {
+                        continue;
+                    }
 
-                const control = this.findBestStructuredDropdownControl(fieldType);
-                if (!control) {
-                    this.recordDebugEvent('targeted-dropdown', 'skipped', {
+                    const candidates = this.rankStructuredDropdownControls(fieldType);
+                    if (candidates.length === 0) {
+                        if (pass === 0) {
+                            this.recordDebugEvent('targeted-dropdown', 'skipped', {
+                                fieldType,
+                                reason: 'no-matching-dropdown-control-found',
+                                source: 'profile'
+                            });
+                        }
+                        continue;
+                    }
+
+                    let resolved = null;
+                    let resolvedControl = null;
+
+                    for (const candidate of candidates) {
+                        const control = candidate.control;
+                        if (!this.isCustomComboboxUnanswered(control)) {
+                            continue;
+                        }
+
+                        resolved = await this.resolveCustomComboboxField(control, fieldType);
+                        if (resolved) {
+                            resolvedControl = control;
+                            break;
+                        }
+                    }
+
+                    if (!resolved || !resolvedControl) {
+                        if (pass === 0) {
+                            this.recordDebugEvent('targeted-dropdown', 'skipped', {
+                                fieldType,
+                                reason: 'targeted-resolution-failed',
+                                source: 'profile'
+                            });
+                        }
+                        continue;
+                    }
+
+                    passProgress = true;
+                    this.filledFields.push({ type: resolved.type || fieldType, element: resolvedControl });
+                    this.highlightField(resolvedControl, true);
+                    this.recordDebugEvent('targeted-dropdown', 'filled', {
                         fieldType,
-                        reason: 'no-matching-dropdown-control-found',
-                        source: 'profile'
+                        element: resolvedControl,
+                        reason: 'targeted-dropdown-selected',
+                        value: resolved.text,
+                        source: resolved.source || 'profile'
                     });
-                    continue;
+
+                    await new Promise(resolve => setTimeout(resolve, 120));
                 }
 
-                if (!this.isCustomComboboxUnanswered(control)) {
-                    this.recordDebugEvent('targeted-dropdown', 'skipped', {
-                        fieldType,
-                        element: control,
-                        reason: 'already-answered',
-                        value: this.getCustomComboboxSelectionText(control),
-                        source: 'profile'
-                    });
-                    continue;
+                if (!passProgress) {
+                    break;
                 }
-
-                const resolved = await this.resolveCustomComboboxField(control, fieldType);
-                if (!resolved) {
-                    this.recordDebugEvent('targeted-dropdown', 'skipped', {
-                        fieldType,
-                        element: control,
-                        reason: 'targeted-resolution-failed',
-                        source: 'profile'
-                    });
-                    continue;
-                }
-
-                this.filledFields.push({ type: resolved.type || fieldType, element: control });
-                this.highlightField(control, true);
-                this.recordDebugEvent('targeted-dropdown', 'filled', {
-                    fieldType,
-                    element: control,
-                    reason: 'targeted-dropdown-selected',
-                    value: resolved.text,
-                    source: resolved.source || 'profile'
-                });
             }
         },
 
-        findBestStructuredDropdownControl(fieldType) {
+        rankStructuredDropdownControls(fieldType) {
             const controls = this.sortElementsTopToBottom(this.getCustomComboboxElements());
-            let bestControl = null;
-            let bestScore = 0;
+            const rankedControls = [];
             const patterns = FieldDetector.patterns[fieldType] || {};
             const searchTerms = [
                 ...(patterns.labels || []),
@@ -1339,7 +2316,7 @@
                 const ariaLabel = this.normalizeText(control.getAttribute('aria-label') || '');
                 const relatedInput = control.matches('input')
                     ? control
-                    : root?.querySelector('input[type="hidden"], input[name], input[id], input[type="text"], input[type="search"]');
+                    : root?.querySelector('input[type="text"], input[type="search"], input[role="combobox"], input[aria-autocomplete="list"], input[type="hidden"], input[name], input[id]');
                 const idNameText = this.normalizeText([
                     control.getAttribute('id') || '',
                     control.getAttribute('name') || '',
@@ -1352,14 +2329,46 @@
                     relatedInput?.getAttribute?.('aria-label') || '',
                     relatedInput?.placeholder || ''
                 ].join(' '));
+                const directContext = relatedInput && typeof FieldDetector?.getFieldDebugContext === 'function'
+                    ? FieldDetector.getFieldDebugContext(relatedInput)
+                    : null;
+                const directContextText = this.normalizeText([
+                    directContext?.questionText || '',
+                    directContext?.labelText || '',
+                    directContext?.placeholder || '',
+                    directContext?.ariaLabel || '',
+                    directContext?.ariaLabelledBy || ''
+                ].join(' '));
                 const inferredFieldType = this.identifyCustomChoiceFieldType(control);
-                let score = inferredFieldType === fieldType ? 100 : 0;
+                const directFieldType = this.inferStructuredChoiceFieldType(
+                    directContext?.questionText,
+                    directContext?.labelText,
+                    directContext?.placeholder,
+                    directContext?.ariaLabel,
+                    directContext?.ariaLabelledBy,
+                    labelledByText,
+                    ariaLabel
+                );
+                let score = 0;
+
+                if (inferredFieldType === fieldType) {
+                    score += 100;
+                } else if (inferredFieldType) {
+                    score -= 55;
+                }
+
+                if (directFieldType === fieldType) {
+                    score += 120;
+                } else if (directFieldType) {
+                    score -= 80;
+                }
 
                 for (const term of searchTerms) {
                     if (!term) continue;
                     if (contextText.includes(term)) score += 10;
                     if (ariaLabel.includes(term)) score += 15;
                     if (labelledByText.includes(term)) score += 18;
+                    if (directContextText.includes(term)) score += 28;
                     if (idNameText.includes(term)) score += 24;
                 }
 
@@ -1371,19 +2380,32 @@
                 if (fieldType === 'disability' && idNameText.includes('disability')) score += 30;
                 if (fieldType === 'hispanicLatino' && (idNameText.includes('hispanic') || idNameText.includes('ethnicity'))) score += 30;
                 if (fieldType === 'gender' && idNameText.includes('gender')) score += 30;
+                if (fieldType === 'veteran' && directContextText.includes('veteran status')) score += 40;
+                if (fieldType === 'disability' && directContextText.includes('disability status')) score += 40;
+                if (fieldType === 'hispanicLatino' && (directContextText.includes('hispanic') || directContextText.includes('latino'))) score += 40;
+                if (fieldType === 'gender' && directContextText.includes('gender')) score += 40;
 
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestControl = control;
+                if (fieldType !== 'race' && directFieldType === 'race') score -= 60;
+                if (fieldType !== 'hispanicLatino' && directFieldType === 'hispanicLatino') score -= 60;
+                if (fieldType !== 'veteran' && directFieldType === 'veteran') score -= 60;
+                if (fieldType !== 'disability' && directFieldType === 'disability') score -= 60;
+
+                if (score > 0) {
+                    rankedControls.push({ control, score });
                 }
             }
 
-            return bestScore > 0 ? bestControl : null;
+            rankedControls.sort((left, right) => right.score - left.score);
+            return rankedControls;
+        },
+
+        findBestStructuredDropdownControl(fieldType) {
+            return this.rankStructuredDropdownControls(fieldType)[0]?.control || null;
         },
 
         async fillAiCustomComboboxFields() {
             const aiSettings = this.settings?.aiAssist;
-            if (!aiSettings?.apiKey) {
+            if (!aiSettings?.enabled) {
                 return;
             }
 
@@ -1416,25 +2438,34 @@
                 return;
             }
 
-            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 3, candidates.length));
+            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 10, candidates.length));
             const jobPostingText = this.extractJobPostingText();
             const pageTitle = document.title || '';
 
             for (const candidate of candidates.slice(0, limit)) {
                 try {
-                    const response = await chrome.runtime.sendMessage({
-                        action: 'generateAiAnswer',
-                        payload: {
-                            question: candidate.question,
-                            fieldLabel: candidate.label,
-                            helperText: candidate.helperText,
-                            sectionContext: candidate.sectionContext,
-                            choiceOptions: candidate.options.map(option => option.text),
-                            fieldHtmlType: candidate.type,
-                            pageTitle,
-                            jobPostingText,
-                            userProfile: this.buildAiUserProfile()
-                        }
+                    if (this.shouldSkipAiChoiceForProfile(candidate)) {
+                        this.recordDebugEvent('ai-choice', 'skipped', {
+                            fieldType: candidate.detectedFieldType,
+                            element: candidate.element,
+                            reason: 'profile-backed-choice-field',
+                            source: 'profile'
+                        });
+                        continue;
+                    }
+
+                    const response = await this.requestAiAnswer({
+                        question: candidate.question,
+                        fieldLabel: candidate.label,
+                        helperText: candidate.helperText,
+                        sectionContext: candidate.sectionContext,
+                        choiceOptions: candidate.options.map(option => option.text),
+                        fieldHtmlType: candidate.type,
+                        pageTitle,
+                        jobPostingText
+                    }, {
+                        fieldType: 'aiComboboxChoice',
+                        element: candidate.element
                     });
 
                     if (!response?.success || !response.answer) continue;
@@ -1459,6 +2490,13 @@
             const fieldType = initialFieldType || this.inferComboboxFieldTypeFromOptions(control, rawOptions);
             const config = fieldType ? this.getStructuredChoiceConfig(fieldType) : null;
             const options = this.filterComboboxOptionsForFieldType(rawOptions, fieldType);
+
+            if (fieldType === 'city' || fieldType === 'location') {
+                const locationResolved = await this.resolveLocationComboboxField(control, fieldType, rawOptions);
+                if (locationResolved) {
+                    return locationResolved;
+                }
+            }
 
             this.recordDebugEvent('custom-combobox-options', options.length > 0 ? 'filled' : 'skipped', {
                 fieldType,
@@ -1510,9 +2548,65 @@
             return null;
         },
 
+        getLocationComboboxSearchValue(fieldType) {
+            if (fieldType === 'city') {
+                return this.userData?.city || this.formatLocation();
+            }
+
+            if (fieldType === 'location') {
+                return this.formatLocation() || this.userData?.city || '';
+            }
+
+            return '';
+        },
+
+        async resolveLocationComboboxField(control, fieldType, existingOptions = []) {
+            const searchValue = this.getLocationComboboxSearchValue(fieldType);
+            if (!searchValue) {
+                return null;
+            }
+
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const input = root.querySelector(`input.${GREENHOUSE_SELECT_CLASSES.input}, .${GREENHOUSE_SELECT_CLASSES.input} input, input[type="text"], input[type="search"]`);
+            if (!input) {
+                return null;
+            }
+
+            input.focus?.();
+            this.setElementValue(input, searchValue);
+            this.dispatchValueEvents(input, { emitFocus: false, emitBlur: false });
+            input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+
+            await new Promise(resolve => setTimeout(resolve, 180));
+
+            const refreshedOptions = await this.getComboboxOptions(root);
+            const options = refreshedOptions.length > 0 ? refreshedOptions : existingOptions;
+            const normalizedSearch = this.normalizeText(searchValue);
+            const normalizedCity = this.normalizeText(this.userData?.city || '');
+            const matchedOption = options.find(option => {
+                const normalizedText = this.normalizeText(option.text || '');
+                return normalizedText.includes(normalizedSearch) || (normalizedCity && normalizedText.includes(normalizedCity));
+            }) || options[0];
+
+            if (!matchedOption) {
+                return null;
+            }
+
+            if (!await this.applyCustomComboboxSelection(root, matchedOption, fieldType)) {
+                return null;
+            }
+
+            return {
+                type: fieldType,
+                text: matchedOption.text,
+                source: 'profile'
+            };
+        },
+
         async resolveCustomComboboxWithAi(control, options, detectedFieldType = null) {
             const aiSettings = this.settings?.aiAssist;
-            if (!aiSettings?.apiKey || !Array.isArray(options) || options.length < 2) {
+            if (!aiSettings?.enabled || !Array.isArray(options) || options.length < 2) {
                 return null;
             }
 
@@ -1534,21 +2628,20 @@
             const preferredProfileAnswer = this.getPreferredProfileAnswer(detectedFieldType);
 
             try {
-                const response = await chrome.runtime.sendMessage({
-                    action: 'generateAiAnswer',
-                    payload: {
-                        question: context.question,
-                        fieldLabel: context.label,
-                        helperText: context.helperText,
-                        sectionContext: context.sectionContext,
-                        detectedFieldType: detectedFieldType || '',
-                        preferredProfileAnswer: preferredProfileAnswer || '',
-                        choiceOptions: options.map(option => option.text),
-                        fieldHtmlType: 'combobox',
-                        pageTitle: document.title || '',
-                        jobPostingText: this.extractJobPostingText(),
-                        userProfile: this.buildAiUserProfile()
-                    }
+                const response = await this.requestAiAnswer({
+                    question: context.question,
+                    fieldLabel: context.label,
+                    helperText: context.helperText,
+                    sectionContext: context.sectionContext,
+                    detectedFieldType: detectedFieldType || '',
+                    preferredProfileAnswer: preferredProfileAnswer || '',
+                    choiceOptions: options.map(option => option.text),
+                    fieldHtmlType: 'combobox',
+                    pageTitle: document.title || '',
+                    jobPostingText: this.extractJobPostingText()
+                }, {
+                    fieldType: detectedFieldType || 'aiComboboxChoice',
+                    element: control
                 });
 
                 if (!response?.success || !response.answer) {
@@ -1561,7 +2654,7 @@
                 }
 
                 const preferredOption = preferredProfileAnswer && detectedFieldType
-                    ? this.findProfileChoiceOption(options, preferredProfileAnswer, FieldDetector.patterns[detectedFieldType]?.options || {})
+                    ? this.findStructuredChoiceOption(options, detectedFieldType, preferredProfileAnswer, FieldDetector.patterns[detectedFieldType]?.options || {})
                     : null;
                 const finalOption = this.isOptionCompatibleWithProfileAnswer(matchedOption, detectedFieldType, preferredProfileAnswer)
                     ? matchedOption
@@ -1590,7 +2683,7 @@
                 }
             }
 
-            return this.findProfileChoiceOption(options, config.value, config.patterns);
+            return this.findStructuredChoiceOption(options, fieldType, config.value, config.patterns);
         },
 
         inferComboboxFieldTypeFromOptions(control, options) {
@@ -1666,6 +2759,10 @@
 
             // If the list clearly does not belong to this field type, reject it entirely.
             if (filtered.length === 0) {
+                if (['hispanicLatino', 'veteran', 'disability'].includes(fieldType)) {
+                    return options.filter(option => !this.isPlaceholderOption(option.text || option.element?.textContent || ''));
+                }
+
                 return [];
             }
 
@@ -2248,11 +3345,19 @@
             const ariaLabel = (resolvedControl.getAttribute('aria-label') || '').toLowerCase();
             const labelledBy = FieldDetector.getAriaLabelledByText(resolvedControl).toLowerCase();
             const root = this.getCustomComboboxContextRoot(resolvedControl);
-            const relatedInput = root.querySelector('input[type="hidden"], input[name], input[id]');
-            const inputName = (relatedInput?.name || '').toLowerCase();
-            const inputId = (relatedInput?.id || '').toLowerCase();
+            const nearbyInputs = Array.from(root.querySelectorAll('input[type="hidden"], input[name], input[id]'));
+            const relatedSignals = nearbyInputs
+                .filter(input => input !== resolvedControl)
+                .map(input => [input.name || '', input.id || '', input.getAttribute('aria-label') || ''].join(' '))
+                .join(' ')
+                .toLowerCase();
             const contextText = (root.textContent || '').toLowerCase().slice(0, 350);
-            return this.inferStructuredChoiceFieldType(controlText, ariaLabel, labelledBy, inputName, inputId, contextText);
+            const questionFirstType = this.inferStructuredChoiceFieldType(labelledBy, ariaLabel, contextText);
+            if (questionFirstType) {
+                return questionFirstType;
+            }
+
+            return this.inferStructuredChoiceFieldType(controlText, relatedSignals, contextText);
         },
 
         async getComboboxOptions(control) {
@@ -2379,7 +3484,7 @@
 
         async fillAiChoiceFields() {
             const aiSettings = this.settings?.aiAssist;
-            if (!aiSettings?.apiKey) {
+            if (!aiSettings?.enabled) {
                 return;
             }
 
@@ -2390,27 +3495,36 @@
 
             console.log(`[JobAutofill] Found ${candidates.length} AI choice candidates`);
 
-            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 3, candidates.length));
+            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 10, candidates.length));
             const jobPostingText = this.extractJobPostingText();
             const pageTitle = document.title || '';
 
             for (const candidate of candidates.slice(0, limit)) {
                 try {
-                    const response = await chrome.runtime.sendMessage({
-                        action: 'generateAiAnswer',
-                        payload: {
-                            question: candidate.question,
-                            fieldLabel: candidate.label,
-                            helperText: candidate.helperText,
-                            sectionContext: candidate.sectionContext,
-                            detectedFieldType: candidate.detectedFieldType || '',
-                            preferredProfileAnswer: this.getPreferredProfileAnswer(candidate.detectedFieldType) || '',
-                            choiceOptions: candidate.options.map(option => option.text),
-                            fieldHtmlType: candidate.type,
-                            pageTitle,
-                            jobPostingText,
-                            userProfile: this.buildAiUserProfile()
-                        }
+                    if (this.shouldSkipAiChoiceForProfile(candidate)) {
+                        this.recordDebugEvent('ai-choice', 'skipped', {
+                            fieldType: candidate.detectedFieldType,
+                            element: candidate.element,
+                            reason: 'profile-backed-choice-field',
+                            source: 'profile'
+                        });
+                        continue;
+                    }
+
+                    const response = await this.requestAiAnswer({
+                        question: candidate.question,
+                        fieldLabel: candidate.label,
+                        helperText: candidate.helperText,
+                        sectionContext: candidate.sectionContext,
+                        detectedFieldType: candidate.detectedFieldType || '',
+                        preferredProfileAnswer: this.getPreferredProfileAnswer(candidate.detectedFieldType) || '',
+                        choiceOptions: candidate.options.map(option => option.text),
+                        fieldHtmlType: candidate.type,
+                        pageTitle,
+                        jobPostingText
+                    }, {
+                        fieldType: candidate.detectedFieldType || 'aiChoiceField',
+                        element: candidate.element
                     });
 
                     if (!response?.success || !response.answer) {
@@ -2424,7 +3538,7 @@
 
                     const preferredProfileAnswer = this.getPreferredProfileAnswer(candidate.detectedFieldType);
                     const preferredOption = preferredProfileAnswer && candidate.detectedFieldType
-                        ? this.findProfileChoiceOption(candidate.options, preferredProfileAnswer, FieldDetector.patterns[candidate.detectedFieldType]?.options || {})
+                        ? this.findStructuredChoiceOption(candidate.options, candidate.detectedFieldType, preferredProfileAnswer, FieldDetector.patterns[candidate.detectedFieldType]?.options || {})
                         : null;
                     const finalOption = this.isOptionCompatibleWithProfileAnswer(matchedOption, candidate.detectedFieldType, preferredProfileAnswer)
                         ? matchedOption
@@ -2774,6 +3888,21 @@
                 return false;
             }
 
+            const role = (input.getAttribute('role') || '').toLowerCase();
+            const ariaAutocomplete = (input.getAttribute('aria-autocomplete') || '').toLowerCase();
+            const className = typeof input.className === 'string' ? input.className.toLowerCase() : '';
+            if (
+                !(input instanceof HTMLTextAreaElement) && (
+                    role === 'combobox' ||
+                    Boolean(input.closest('[role="combobox"]')) ||
+                    ariaAutocomplete === 'list' ||
+                    ariaAutocomplete === 'both' ||
+                    className.includes(GREENHOUSE_SELECT_CLASSES.input)
+                )
+            ) {
+                return false;
+            }
+
             const allText = [
                 FieldDetector.getLabelText(input),
                 input.placeholder,
@@ -2805,6 +3934,16 @@
                 'cover letter', 'summary', 'motivation', 'interested', 'excited', 'fit for this role',
                 'experience', 'background', 'accomplishment', 'achievement', 'challenge', '?'
             ];
+
+            const context = this.getAiFieldContext(input);
+            const hasManualQuestionSignal = Boolean(context.question) && (
+                this.looksLikeQuestionPrompt(context.question) ||
+                this.looksLikeQuestionPrompt(context.sectionContext)
+            );
+
+            if (hasManualQuestionSignal) {
+                return true;
+            }
 
             return input instanceof HTMLTextAreaElement || aiPromptPatterns.some(pattern => allText.includes(pattern));
         },
@@ -3025,6 +4164,7 @@
             for (const input of allInputs) {
                 // Skip if already filled
                 if (input.value && input.value.trim()) continue;
+                if (FieldDetector.isCustomComboboxInput(input)) continue;
 
                 const labelText = FieldDetector.getLabelText(input).toLowerCase();
                 const placeholder = (input.placeholder || '').toLowerCase();
@@ -3509,6 +4649,9 @@
             for (const input of locationInputs) {
                 // Skip if already filled
                 if (input.value && input.value.trim()) continue;
+                if (FieldDetector.isCustomComboboxInput(input)) {
+                    continue;
+                }
 
                 if (!this.isElementAllowed(input)) continue;
 

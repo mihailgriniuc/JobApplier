@@ -20,10 +20,6 @@
 }
 
 #job-autofill-btn {
-    position: fixed;
-    bottom: 24px;
-    right: 24px;
-    z-index: 2147483647;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -40,6 +36,42 @@
     cursor: pointer;
     box-shadow: var(--job-shadow);
     transition: var(--job-transition);
+}
+
+#job-autofill-widget {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    z-index: 2147483647;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+}
+
+#job-autofill-panel {
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(60vh, 520px);
+    margin-bottom: -2px;
+    overflow: hidden;
+    background: var(--job-surface);
+    color: var(--job-ink);
+    border: 2px solid var(--job-border);
+    border-bottom-width: 0;
+    border-radius: 18px 18px 0 0;
+    box-shadow: var(--job-shadow-lg);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(12px) scale(0.98);
+    transform-origin: bottom right;
+    transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+#job-autofill-widget:hover #job-autofill-panel,
+#job-autofill-widget.is-open #job-autofill-panel,
+#job-autofill-widget:focus-within #job-autofill-panel {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
 }
 
 #job-autofill-btn:hover {
@@ -70,6 +102,185 @@
 
 #job-autofill-btn svg {
     flex-shrink: 0;
+}
+
+.job-autofill-panel-header {
+    padding: 16px 18px 10px;
+    border-bottom: 2px solid rgba(18, 18, 18, 0.08);
+}
+
+.job-autofill-panel-note {
+    margin-top: 4px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.4;
+    color: rgba(18, 18, 18, 0.72);
+    text-transform: none;
+}
+
+.job-autofill-panel-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    padding: 14px 18px;
+    background: linear-gradient(180deg, rgba(246, 241, 255, 0.95), rgba(255, 255, 255, 0.96));
+    border-bottom: 2px solid rgba(18, 18, 18, 0.08);
+}
+
+.job-autofill-panel-stat {
+    min-width: 0;
+    padding: 10px 10px 12px;
+    border: 2px solid var(--job-border);
+    border-radius: 12px;
+    background: var(--job-surface);
+    box-shadow: 3px 3px 0 var(--job-border);
+}
+
+.job-autofill-panel-stat span {
+    display: block;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: rgba(18, 18, 18, 0.7);
+}
+
+.job-autofill-panel-stat strong {
+    display: block;
+    margin-top: 4px;
+    font-size: 20px;
+    line-height: 1;
+}
+
+.job-autofill-panel-list {
+    max-height: min(34vh, 320px);
+    overflow-y: auto;
+    padding: 10px 12px 14px;
+    background: var(--job-surface);
+}
+
+.job-autofill-panel-item {
+    display: grid;
+    grid-template-columns: 28px minmax(0, 1fr);
+    gap: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 2px solid rgba(18, 18, 18, 0.08);
+    background: #fffdfd;
+}
+
+.job-autofill-panel-item + .job-autofill-panel-item {
+    margin-top: 10px;
+}
+
+.job-autofill-panel-marker {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border: 2px solid var(--job-border);
+    border-radius: 999px;
+    font-size: 15px;
+    font-weight: 900;
+    box-shadow: 2px 2px 0 var(--job-border);
+}
+
+.job-autofill-panel-copy {
+    min-width: 0;
+}
+
+.job-autofill-panel-line {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.job-autofill-panel-line strong {
+    font-size: 14px;
+    line-height: 1.3;
+}
+
+.job-autofill-panel-badge {
+    flex-shrink: 0;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    background: rgba(18, 18, 18, 0.08);
+}
+
+.job-autofill-panel-title,
+.job-autofill-panel-detail,
+.job-autofill-panel-empty {
+    margin-top: 6px;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 12px;
+    line-height: 1.45;
+    color: rgba(18, 18, 18, 0.76);
+}
+
+.job-autofill-panel-empty {
+    padding: 12px 10px 6px;
+}
+
+.job-autofill-panel-item.is-completed,
+.job-autofill-panel-item.is-answered {
+    background: var(--job-success-light);
+}
+
+.job-autofill-panel-item.is-completed .job-autofill-panel-marker,
+.job-autofill-panel-item.is-answered .job-autofill-panel-marker {
+    background: var(--job-success);
+    color: var(--job-surface);
+}
+
+.job-autofill-panel-item.is-skipped {
+    background: #fff3d9;
+}
+
+.job-autofill-panel-item.is-skipped .job-autofill-panel-marker {
+    background: #ffd36d;
+    color: var(--job-ink);
+}
+
+.job-autofill-panel-item.is-error {
+    background: var(--job-error-light);
+}
+
+.job-autofill-panel-item.is-error .job-autofill-panel-marker {
+    background: var(--job-error);
+    color: var(--job-surface);
+}
+
+.job-autofill-panel-item.is-pending {
+    background: var(--job-canvas);
+}
+
+.job-autofill-panel-item.is-pending .job-autofill-panel-marker {
+    background: var(--job-accent-light);
+    color: var(--job-ink);
+}
+
+@media (max-width: 640px) {
+    #job-autofill-widget {
+        right: 12px;
+        bottom: 12px;
+    }
+
+    #job-autofill-panel {
+        width: min(360px, calc(100vw - 24px));
+    }
+
+    .job-autofill-panel-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
 }
 
 #job-autofill-btn .spin {

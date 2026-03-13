@@ -228,6 +228,12 @@ body {
     color: var(--ink);
 }
 
+.resume-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 /* Buttons */
 .btn {
     display: inline-flex;
@@ -456,6 +462,7 @@ kbd {
 }
 
 .form-group textarea,
+.form-group select,
 .form-group input[type="password"],
 .form-group input[type="number"],
 .form-group input[type="text"] {
@@ -476,6 +483,7 @@ kbd {
 }
 
 .form-group textarea:focus,
+.form-group select:focus,
 .form-group input[type="password"]:focus,
 .form-group input[type="number"]:focus,
 .form-group input[type="text"]:focus {
@@ -637,6 +645,18 @@ kbd {
     box-shadow: var(--shadow);
 }
 
+.form-group select {
+    width: 100%;
+    padding: 11px 12px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
+    transition: var(--transition);
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow);
+}
+
 .form-group input:focus {
     outline: none;
     border-color: var(--primary);
@@ -695,5 +715,9 @@ kbd {
 
     .form-row {
         flex-direction: column;
+    }
+
+    .resume-actions {
+        width: 100%;
     }
 }
