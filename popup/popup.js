@@ -33,14 +33,22 @@ document.addEventListener('DOMContentLoaded', async () => {
     const editDataBtn = document.getElementById('editDataBtn');
     const viewDataBtn = document.getElementById('viewDataBtn');
     const settingsBtn = document.getElementById('settingsBtn');
+    const checkUpdatesBtn = document.getElementById('checkUpdatesBtn');
+    const downloadUpdateBtn = document.getElementById('downloadUpdateBtn');
+    const updateHeadline = document.getElementById('updateHeadline');
+    const updateMeta = document.getElementById('updateMeta');
+    const versionLabel = document.getElementById('versionLabel');
 
     let currentStep = 1;
     let resumeFile = null;
+    let latestDownloadUrl = 'https://github.com/mihailgriniuc/JobApplier';
 
     // Initialize
     await initialize();
 
     async function initialize() {
+        setRuntimeVersion();
+
         const hasConsented = await Storage.hasConsented();
         const hasSetup = await Storage.hasCompletedSetup();
 
@@ -50,7 +58,96 @@ document.addEventListener('DOMContentLoaded', async () => {
             showScreen('setup');
         } else {
             showScreen('main');
-            await loadUserGreeting();
+            await Promise.all([
+                loadUserGreeting(),
+                refreshUpdateStatus()
+            ]);
+        }
+    }
+
+    function setRuntimeVersion() {
+        versionLabel.textContent = `v${chrome.runtime.getManifest().version}`;
+    }
+
+    function formatRelativeTime(timestamp) {
+        const parsedTime = Date.parse(timestamp);
+        if (Number.isNaN(parsedTime)) {
+            return 'recently';
+        }
+
+        const elapsedMs = Date.now() - parsedTime;
+        const elapsedMinutes = Math.max(0, Math.round(elapsedMs / 60000));
+
+        if (elapsedMinutes < 1) {
+            return 'just now';
+        }
+
+        if (elapsedMinutes < 60) {
+            return `${elapsedMinutes}m ago`;
+        }
+
+        const elapsedHours = Math.round(elapsedMinutes / 60);
+        if (elapsedHours < 24) {
+            return `${elapsedHours}h ago`;
+        }
+
+        return `${Math.round(elapsedHours / 24)}d ago`;
+    }
+
+    function setUpdateLoadingState(isLoading) {
+        checkUpdatesBtn.disabled = isLoading;
+        checkUpdatesBtn.textContent = isLoading ? 'Checking...' : 'Check now';
+    }
+
+    function renderUpdateStatus(status) {
+        latestDownloadUrl = status.downloadUrl || status.repoUrl || latestDownloadUrl;
+        downloadUpdateBtn.textContent = status.hasUpdate ? 'Download latest' : 'View repo';
+
+        if (status.error) {
+            updateHeadline.textContent = 'GitHub check unavailable';
+            updateMeta.textContent = status.latestVersion
+                ? `Last known remote version v${status.latestVersion}. ${status.error}`
+                : status.error;
+            return;
+        }
+
+        if (status.hasUpdate) {
+            updateHeadline.textContent = `Update available: v${status.latestVersion}`;
+            updateMeta.textContent = `Installed v${status.currentVersion}. Download the latest source bundle from GitHub, replace your local extension files, then click Reload in chrome://extensions.`;
+            return;
+        }
+
+        updateHeadline.textContent = 'You are on the latest version';
+        updateMeta.textContent = `Installed v${status.currentVersion}. Checked GitHub ${formatRelativeTime(status.checkedAt)} on branch ${status.defaultBranch}.`;
+    }
+
+    async function refreshUpdateStatus(force = false) {
+        setUpdateLoadingState(true);
+
+        try {
+            const response = await chrome.runtime.sendMessage({
+                action: 'getExtensionUpdateStatus',
+                force
+            });
+
+            if (!response?.success) {
+                throw new Error(response?.error || 'Failed to check GitHub for updates.');
+            }
+
+            renderUpdateStatus(response);
+        } catch (error) {
+            renderUpdateStatus({
+                currentVersion: chrome.runtime.getManifest().version,
+                latestVersion: '',
+                hasUpdate: false,
+                checkedAt: '',
+                defaultBranch: 'main',
+                repoUrl: latestDownloadUrl,
+                downloadUrl: latestDownloadUrl,
+                error: error.message || 'Failed to check GitHub for updates.'
+            });
+        } finally {
+            setUpdateLoadingState(false);
         }
     }
 
@@ -408,6 +505,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     settingsBtn.addEventListener('click', () => {
         chrome.runtime.openOptionsPage();
+    });
+
+    checkUpdatesBtn.addEventListener('click', async () => {
+        await refreshUpdateStatus(true);
+    });
+
+    downloadUpdateBtn.addEventListener('click', () => {
+        chrome.tabs.create({ url: latestDownloadUrl });
     });
 
     async function loadExistingData() {

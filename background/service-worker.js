@@ -19,8 +19,146 @@ const INJECTION_RETRY_COUNT = 8;
 const INJECTION_RETRY_DELAY_MS = 150;
 const USER_DATA_STORAGE_KEY = 'jobAutofill_userData';
 const SETTINGS_STORAGE_KEY = 'jobAutofill_settings';
+const UPDATE_STATUS_STORAGE_KEY = 'jobAutofill_updateStatus';
 const MISTRAL_API_URL = 'https://api.mistral.ai/v1/chat/completions';
+const GITHUB_REPO_OWNER = 'mihailgriniuc';
+const GITHUB_REPO_NAME = 'JobApplier';
+const GITHUB_REPO_API_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
+const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
+const UPDATE_CHECK_INTERVAL_MS = 1000 * 60 * 60 * 6;
 let localAiConfigCache = null;
+
+function normalizeVersion(version) {
+    return typeof version === 'string' ? version.trim().replace(/^v/i, '') : '';
+}
+
+function compareVersions(leftVersion, rightVersion) {
+    const left = normalizeVersion(leftVersion).split('.').map(segment => Number.parseInt(segment, 10) || 0);
+    const right = normalizeVersion(rightVersion).split('.').map(segment => Number.parseInt(segment, 10) || 0);
+    const length = Math.max(left.length, right.length, 3);
+
+    for (let index = 0; index < length; index += 1) {
+        const leftPart = left[index] || 0;
+        const rightPart = right[index] || 0;
+
+        if (leftPart > rightPart) {
+            return 1;
+        }
+
+        if (leftPart < rightPart) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+function createUpdateStatus(overrides = {}) {
+    return {
+        currentVersion: chrome.runtime.getManifest().version,
+        latestVersion: '',
+        hasUpdate: false,
+        checkedAt: '',
+        downloadUrl: `${GITHUB_REPO_URL}/archive/refs/heads/main.zip`,
+        repoUrl: GITHUB_REPO_URL,
+        defaultBranch: 'main',
+        error: '',
+        ...overrides
+    };
+}
+
+function isCachedUpdateStatusFresh(updateStatus) {
+    if (!updateStatus?.checkedAt || updateStatus.currentVersion !== chrome.runtime.getManifest().version) {
+        return false;
+    }
+
+    const checkedAtMs = Date.parse(updateStatus.checkedAt);
+    if (Number.isNaN(checkedAtMs)) {
+        return false;
+    }
+
+    return (Date.now() - checkedAtMs) < UPDATE_CHECK_INTERVAL_MS;
+}
+
+async function getCachedUpdateStatus() {
+    const result = await chrome.storage.local.get([UPDATE_STATUS_STORAGE_KEY]);
+    const updateStatus = result[UPDATE_STATUS_STORAGE_KEY];
+    return updateStatus ? createUpdateStatus(updateStatus) : null;
+}
+
+async function saveUpdateStatus(updateStatus) {
+    await chrome.storage.local.set({
+        [UPDATE_STATUS_STORAGE_KEY]: createUpdateStatus(updateStatus)
+    });
+}
+
+async function fetchJson(url) {
+    const response = await fetch(url, {
+        headers: {
+            Accept: 'application/vnd.github+json'
+        },
+        cache: 'no-store'
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        throw new Error(data?.message || `GitHub request failed with ${response.status}`);
+    }
+
+    return data;
+}
+
+async function fetchRemoteManifestStatus() {
+    const repository = await fetchJson(GITHUB_REPO_API_URL);
+    const defaultBranch = repository.default_branch || 'main';
+    const manifestResponse = await fetchJson(`${GITHUB_REPO_API_URL}/contents/manifest.json?ref=${encodeURIComponent(defaultBranch)}`);
+    const encodedContent = typeof manifestResponse.content === 'string'
+        ? manifestResponse.content.replace(/\n/g, '')
+        : '';
+
+    if (!encodedContent) {
+        throw new Error('GitHub did not return a manifest.json payload.');
+    }
+
+    const remoteManifest = JSON.parse(atob(encodedContent));
+    const latestVersion = normalizeVersion(remoteManifest.version);
+
+    if (!latestVersion) {
+        throw new Error('GitHub manifest.json is missing a version.');
+    }
+
+    return createUpdateStatus({
+        latestVersion,
+        hasUpdate: compareVersions(latestVersion, chrome.runtime.getManifest().version) > 0,
+        checkedAt: new Date().toISOString(),
+        downloadUrl: `${repository.html_url || GITHUB_REPO_URL}/archive/refs/heads/${defaultBranch}.zip`,
+        repoUrl: repository.html_url || GITHUB_REPO_URL,
+        defaultBranch,
+        error: ''
+    });
+}
+
+async function getExtensionUpdateStatus({ force = false } = {}) {
+    const cachedStatus = await getCachedUpdateStatus();
+    if (!force && cachedStatus && isCachedUpdateStatusFresh(cachedStatus)) {
+        return cachedStatus;
+    }
+
+    try {
+        const nextStatus = await fetchRemoteManifestStatus();
+        await saveUpdateStatus(nextStatus);
+        return nextStatus;
+    } catch (error) {
+        const fallbackStatus = createUpdateStatus({
+            ...(cachedStatus || {}),
+            checkedAt: cachedStatus?.checkedAt || new Date().toISOString(),
+            error: error.message || 'Unable to reach GitHub.'
+        });
+
+        await saveUpdateStatus(fallbackStatus);
+        return fallbackStatus;
+    }
+}
 
 function getDefaultAiAssistSettings() {
     return {
@@ -337,15 +475,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return true;
     }
 
+    if (message.action === 'getExtensionUpdateStatus') {
+        (async () => {
+            try {
+                const updateStatus = await getExtensionUpdateStatus({ force: message.force === true });
+                sendResponse({ success: true, ...updateStatus });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error.message || 'Failed to check for updates.'
+                });
+            }
+        })();
+        return true;
+    }
+
     return false;
 });
 
 // Handle installation
 chrome.runtime.onInstalled.addListener((details) => {
+    getExtensionUpdateStatus({ force: true }).catch(error => {
+        console.warn('Failed to refresh GitHub update status during install/update:', error);
+    });
+
     if (details.reason === 'install') {
         // Open options page on first install for setup
         chrome.tabs.create({ url: 'popup/popup.html?setup=true' });
     }
+});
+
+chrome.runtime.onStartup.addListener(() => {
+    getExtensionUpdateStatus().catch(error => {
+        console.warn('Failed to refresh GitHub update status on startup:', error);
+    });
 });
 
 // Update badge when tab changes to show if autofill is available

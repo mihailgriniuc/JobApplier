@@ -63,6 +63,8 @@ A Chrome extension that automates the completion of job application forms by sec
 5. Select the `JobApplier` folder
 6. The extension icon will appear in your toolbar
 
+Chrome will not auto-install GitHub updates for an unpacked extension. This project now checks the repository's `manifest.json` version from GitHub and surfaces an update prompt in the popup, but you still need to download the latest source and reload the extension manually from `chrome://extensions`.
+
 ### Initial Setup
 
 1. Click the extension icon

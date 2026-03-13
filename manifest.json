@@ -10,7 +10,8 @@
         "scripting"
     ],
     "host_permissions": [
-        "https://api.mistral.ai/*"
+        "https://api.mistral.ai/*",
+        "https://api.github.com/*"
     ],
     "action": {
         "default_popup": "popup/popup.html",
