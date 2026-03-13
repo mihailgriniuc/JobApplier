@@ -18,6 +18,109 @@ const MESSAGE_TIMEOUT_MS = 1500;
 const INJECTION_RETRY_COUNT = 8;
 const INJECTION_RETRY_DELAY_MS = 150;
 const USER_DATA_STORAGE_KEY = 'jobAutofill_userData';
+const SETTINGS_STORAGE_KEY = 'jobAutofill_settings';
+const MISTRAL_API_URL = 'https://api.mistral.ai/v1/chat/completions';
+
+function getDefaultAiAssistSettings() {
+    return {
+        enabled: false,
+        model: 'mistral-small-latest',
+        apiKey: '',
+        extraContext: '',
+        maxCharacters: 320,
+        maxQuestionsPerRun: 3
+    };
+}
+
+async function getStoredSettings() {
+    const result = await chrome.storage.local.get([SETTINGS_STORAGE_KEY]);
+    const settings = result[SETTINGS_STORAGE_KEY] || {};
+
+    return {
+        autoDetect: settings.autoDetect !== false,
+        showIndicators: settings.showIndicators !== false,
+        confirmBeforeFill: settings.confirmBeforeFill === true,
+        aiAssist: {
+            ...getDefaultAiAssistSettings(),
+            ...(settings.aiAssist || {})
+        }
+    };
+}
+
+function buildAiMessages(payload, aiSettings) {
+    const maxCharacters = Math.max(80, Math.min(Number(aiSettings.maxCharacters) || 320, 1200));
+    const userProfile = JSON.stringify(payload.userProfile || {}, null, 2);
+
+    return [
+        {
+            role: 'system',
+            content: [
+                'You write concise, job-application answers for screening questions.',
+                'Use only the provided profile, job posting, and extra context.',
+                'Do not invent employers, years, certifications, tools, or achievements not present in the context.',
+                'Answer in first person, keep it professional but natural, and tailor it to the job posting when relevant.',
+                `Return plain text only and keep the answer under ${maxCharacters} characters unless the question explicitly asks for more detail.`
+            ].join(' ')
+        },
+        {
+            role: 'user',
+            content: [
+                `Question: ${payload.question || ''}`,
+                `Field label/context: ${payload.fieldLabel || ''}`,
+                `Page title: ${payload.pageTitle || ''}`,
+                'User profile:',
+                userProfile,
+                aiSettings.extraContext ? `Additional resume context: ${aiSettings.extraContext}` : '',
+                payload.jobPostingText ? `Job posting excerpt:\n${payload.jobPostingText}` : ''
+            ].filter(Boolean).join('\n\n')
+        }
+    ];
+}
+
+async function generateMistralAnswer(payload) {
+    const settings = await getStoredSettings();
+    const aiSettings = settings.aiAssist || getDefaultAiAssistSettings();
+
+    if (!aiSettings.enabled) {
+        throw new Error('AI assistance is disabled in settings.');
+    }
+
+    if (!aiSettings.apiKey) {
+        throw new Error('Missing Mistral API key. Add it in Settings > AI Assistance.');
+    }
+
+    const response = await fetch(MISTRAL_API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Authorization: `Bearer ${aiSettings.apiKey}`
+        },
+        body: JSON.stringify({
+            model: aiSettings.model || 'mistral-small-latest',
+            temperature: 0.4,
+            top_p: 0.9,
+            messages: buildAiMessages(payload, aiSettings)
+        })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        const apiMessage = data?.message || data?.error?.message || `Mistral request failed with ${response.status}`;
+        throw new Error(apiMessage);
+    }
+
+    const answer = data?.choices?.[0]?.message?.content?.trim();
+    if (!answer) {
+        throw new Error('Mistral returned an empty answer.');
+    }
+
+    return {
+        answer,
+        model: aiSettings.model || 'mistral-small-latest'
+    };
+}
 
 function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -173,6 +276,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             }
         })();
         return true; // Keep channel open for async response
+    }
+
+    if (message.action === 'generateAiAnswer') {
+        (async () => {
+            try {
+                const result = await generateMistralAnswer(message.payload || {});
+                sendResponse({ success: true, ...result });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error.message || 'Failed to generate AI answer'
+                });
+            }
+        })();
+        return true;
     }
 
     return false;

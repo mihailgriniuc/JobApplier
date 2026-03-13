@@ -110,11 +110,10 @@
 <body>
     <div class="container">
         <h1>Privacy Policy</h1>
-        <p class="updated">Last updated: February 2026</p>
+        <p class="updated">Last updated: March 2026</p>
 
         <div class="highlight">
-            <strong>Key Point:</strong> All your data is stored locally on your device. We never collect, transmit, or
-            store any of your personal information on external servers.
+            <strong>Key Point:</strong> Your data is stored locally on your device by default. If you explicitly enable AI answers, the extension sends the relevant prompt context to Mistral using the API key you provide.
         </div>
 
         <h2>Data Collection</h2>
@@ -129,8 +128,8 @@
         <h2>Data Storage</h2>
         <p>All data is stored locally on your device using Chrome's built-in storage API. Your data:</p>
         <ul>
-            <li>Never leaves your device</li>
-            <li>Is not transmitted to any external servers</li>
+            <li>Remains on your device unless you enable the optional AI-answer feature</li>
+            <li>Is sent to Mistral only when AI answers are enabled and only for the context needed to generate an answer</li>
             <li>Is not shared with third parties</li>
             <li>Is not used for analytics or tracking</li>
         </ul>
@@ -140,7 +139,18 @@
         <ul>
             <li>Auto-fill job application forms when you trigger the autofill feature</li>
             <li>Display your saved information in the extension popup and options page</li>
+            <li>Generate optional AI answers for open-ended screening questions when you enable that feature</li>
         </ul>
+
+        <h2>Optional AI Answers</h2>
+        <p>If you enable AI answers in Settings, the extension sends the following prompt context to Mistral:</p>
+        <ul>
+            <li>The open-ended question text</li>
+            <li>Relevant job-posting text from the current page</li>
+            <li>Your saved profile fields that help answer the question</li>
+            <li>Any extra resume context you explicitly add in Settings</li>
+        </ul>
+        <p>The Mistral API key is stored locally in Chrome storage and used only to call Mistral on your behalf.</p>
 
         <h2>Data Security</h2>
         <p>Your data is protected by Chrome's built-in security mechanisms. The extension does not have access to any

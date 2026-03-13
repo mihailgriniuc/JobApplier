@@ -201,6 +201,52 @@
                 </div>
 
                 <div class="section-card">
+                    <h2>AI Assistance</h2>
+
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <h4>Enable AI answers</h4>
+                            <p>Use Mistral to answer open-ended text questions with your profile and the job posting.</p>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="aiAssistToggle">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <div class="ai-settings-grid">
+                        <div class="form-group">
+                            <label for="mistralApiKeyInput">Mistral API Key</label>
+                            <input type="password" id="mistralApiKeyInput" placeholder="Paste your Mistral API key">
+                            <p class="help-text">Stored locally. Used only when AI answers are enabled.</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="aiModelInput">Model</label>
+                            <input type="text" id="aiModelInput" placeholder="mistral-small-latest">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="aiMaxCharactersInput">Max answer length</label>
+                            <input type="number" id="aiMaxCharactersInput" min="80" max="1200" step="10">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="aiMaxQuestionsInput">Max AI questions per autofill</label>
+                            <input type="number" id="aiMaxQuestionsInput" min="1" max="10" step="1">
+                        </div>
+
+                        <div class="form-group form-group--full">
+                            <label for="aiExtraContextInput">Extra resume context</label>
+                            <textarea id="aiExtraContextInput" rows="5" placeholder="Paste resume highlights, achievements, or a short professional summary for AI-generated answers."></textarea>
+                            <p class="help-text">Use this to give the model resume-specific facts without parsing PDF or DOCX files in the browser.</p>
+                        </div>
+                    </div>
+
+                    <p class="help-text help-text--warning">When enabled, the extension sends the question, relevant job-posting text, your saved profile fields, and this extra context to Mistral so it can draft an answer.</p>
+                </div>
+
+                <div class="section-card">
                     <h2>Keyboard Shortcuts</h2>
                     <div class="shortcut-info">
                         <div class="shortcut-item">

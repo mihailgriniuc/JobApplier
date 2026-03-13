@@ -444,6 +444,55 @@ kbd {
     text-decoration: underline;
 }
 
+.ai-settings-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 16px;
+    margin-top: 20px;
+}
+
+.form-group--full {
+    grid-column: 1 / -1;
+}
+
+.form-group textarea,
+.form-group input[type="password"],
+.form-group input[type="number"],
+.form-group input[type="text"] {
+    width: 100%;
+    padding: 11px 12px;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 14px;
+    transition: var(--transition);
+    background: var(--surface);
+    color: var(--ink);
+    box-shadow: var(--shadow);
+}
+
+.form-group textarea {
+    min-height: 120px;
+    resize: vertical;
+}
+
+.form-group textarea:focus,
+.form-group input[type="password"]:focus,
+.form-group input[type="number"]:focus,
+.form-group input[type="text"]:focus {
+    outline: none;
+    border-color: var(--primary);
+    box-shadow: var(--shadow-lg);
+}
+
+.help-text--warning {
+    margin-top: 16px;
+    padding: 12px 16px;
+    background: #fff2c2;
+    border: 2px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+}
+
 /* File Upload */
 .file-upload-area {
     border: 2px dashed var(--border);
@@ -629,6 +678,10 @@ kbd {
 /* Responsive */
 @media (max-width: 600px) {
     .data-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .ai-settings-grid {
         grid-template-columns: 1fr;
     }
 

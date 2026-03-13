@@ -13,6 +13,53 @@ const StorageKeys = {
 
 const CURRENT_SCHEMA_VERSION = 1;
 
+const DEFAULT_SETTINGS = {
+    autoDetect: true,
+    showIndicators: true,
+    confirmBeforeFill: false,
+    aiAssist: {
+        enabled: false,
+        model: 'mistral-small-latest',
+        apiKey: '',
+        extraContext: '',
+        maxCharacters: 320,
+        maxQuestionsPerRun: 3
+    }
+};
+
+function sanitizeAiAssistSettings(aiAssist) {
+    const maxCharacters = Number(aiAssist?.maxCharacters);
+    const maxQuestionsPerRun = Number(aiAssist?.maxQuestionsPerRun);
+
+    return {
+        ...DEFAULT_SETTINGS.aiAssist,
+        ...(aiAssist || {}),
+        enabled: aiAssist?.enabled === true,
+        model: (aiAssist?.model || DEFAULT_SETTINGS.aiAssist.model).trim() || DEFAULT_SETTINGS.aiAssist.model,
+        apiKey: (aiAssist?.apiKey || '').trim(),
+        extraContext: (aiAssist?.extraContext || '').trim(),
+        maxCharacters: Number.isFinite(maxCharacters)
+            ? Math.min(Math.max(Math.round(maxCharacters), 80), 1200)
+            : DEFAULT_SETTINGS.aiAssist.maxCharacters,
+        maxQuestionsPerRun: Number.isFinite(maxQuestionsPerRun)
+            ? Math.min(Math.max(Math.round(maxQuestionsPerRun), 1), 10)
+            : DEFAULT_SETTINGS.aiAssist.maxQuestionsPerRun
+    };
+}
+
+function normalizeSettings(settings) {
+    const source = settings || {};
+
+    return {
+        ...DEFAULT_SETTINGS,
+        ...source,
+        autoDetect: source.autoDetect !== false,
+        showIndicators: source.showIndicators !== false,
+        confirmBeforeFill: source.confirmBeforeFill === true,
+        aiAssist: sanitizeAiAssistSettings(source.aiAssist)
+    };
+}
+
 const Storage = {
     /**
      * Save user data to Chrome storage
@@ -133,7 +180,7 @@ const Storage = {
      */
     async saveSettings(settings) {
         await chrome.storage.local.set({
-            [StorageKeys.SETTINGS]: settings
+            [StorageKeys.SETTINGS]: normalizeSettings(settings)
         });
     },
 
@@ -143,11 +190,7 @@ const Storage = {
      */
     async getSettings() {
         const result = await chrome.storage.local.get([StorageKeys.SETTINGS]);
-        return result[StorageKeys.SETTINGS] || {
-            autoDetect: true,
-            showIndicators: true,
-            confirmBeforeFill: false
-        };
+        return normalizeSettings(result[StorageKeys.SETTINGS]);
     },
 
     /**
@@ -241,4 +284,5 @@ const Storage = {
 if (typeof window !== 'undefined') {
     window.Storage = Storage;
     window.StorageKeys = StorageKeys;
+    window.DEFAULT_SETTINGS = DEFAULT_SETTINGS;
 }

@@ -22,7 +22,15 @@
         settings: {
             autoDetect: true,
             showIndicators: true,
-            confirmBeforeFill: false
+            confirmBeforeFill: false,
+            aiAssist: {
+                enabled: false,
+                model: 'mistral-small-latest',
+                apiKey: '',
+                extraContext: '',
+                maxCharacters: 320,
+                maxQuestionsPerRun: 3
+            }
         },
         allowedFormKeys: null,
         formKeyMap: new WeakMap(),
@@ -419,6 +427,9 @@
                 this.fillTextFields(refreshedFields);
                 this.fillSelectFields(refreshedFields);
 
+                // Fill open-ended manual questions after structured fields are handled.
+                await this.fillAiTextQuestions(refreshedFields);
+
                 // Handle file upload (only if not already uploaded)
                 await this.handleFileUpload();
 
@@ -671,6 +682,207 @@
 
             // Also scan for any text inputs that might be asking for city+state combined
             this.fillCombinedLocationFields();
+        },
+
+        async fillAiTextQuestions(detectedFields) {
+            const aiSettings = this.settings?.aiAssist;
+            if (!aiSettings?.enabled || !aiSettings?.apiKey) {
+                return;
+            }
+
+            const candidates = this.findAiQuestionCandidates(detectedFields);
+            if (candidates.length === 0) {
+                return;
+            }
+
+            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 3, candidates.length));
+            const jobPostingText = this.extractJobPostingText();
+            const pageTitle = document.title || '';
+
+            for (const candidate of candidates.slice(0, limit)) {
+                try {
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'generateAiAnswer',
+                        payload: {
+                            question: candidate.question,
+                            fieldLabel: candidate.label,
+                            pageTitle,
+                            jobPostingText,
+                            userProfile: this.buildAiUserProfile()
+                        }
+                    });
+
+                    if (!response?.success || !response.answer) {
+                        continue;
+                    }
+
+                    if (this.fillInput(candidate.input, response.answer)) {
+                        this.filledFields.push({ type: 'aiTextQuestion', element: candidate.input });
+                        this.highlightField(candidate.input, true);
+                    }
+                } catch (error) {
+                    console.warn('[JobAutofill] AI answer generation failed:', error);
+                }
+            }
+        },
+
+        buildAiUserProfile() {
+            return {
+                fullName: this.userData?.fullName || '',
+                email: this.userData?.email || '',
+                phone: this.userData?.phone || '',
+                linkedin: this.userData?.linkedin || '',
+                location: this.formatLocation(),
+                workAuthorization: this.userData?.workAuth || '',
+                sponsorship: this.userData?.sponsorship || '',
+                onsiteComfort: this.userData?.onsiteComfort || '',
+                relocationWillingness: this.userData?.relocationWillingness || '',
+                internshipStatus: this.userData?.internshipStatus || '',
+                startAvailability: this.userData?.startAvailability || ''
+            };
+        },
+
+        findAiQuestionCandidates(detectedFields) {
+            const mappedInputs = new Set(Object.values(detectedFields || {}).flat());
+            const textInputs = document.querySelectorAll('textarea, input[type="text"], input:not([type])');
+            const candidates = [];
+            const seenQuestions = new Set();
+
+            for (const input of textInputs) {
+                if (mappedInputs.has(input)) {
+                    continue;
+                }
+
+                if (!this.isElementAllowed(input) || input.disabled || input.readOnly) {
+                    continue;
+                }
+
+                if (input.value && input.value.trim()) {
+                    continue;
+                }
+
+                if (!this.isAiEligibleTextInput(input)) {
+                    continue;
+                }
+
+                const prompt = this.getAiQuestionPrompt(input);
+                if (!prompt) {
+                    continue;
+                }
+
+                const dedupeKey = this.normalizeText(prompt);
+                if (seenQuestions.has(dedupeKey)) {
+                    continue;
+                }
+
+                seenQuestions.add(dedupeKey);
+                candidates.push({
+                    input,
+                    question: prompt,
+                    label: FieldDetector.getLabelText(input) || input.getAttribute('aria-label') || ''
+                });
+            }
+
+            return candidates;
+        },
+
+        isAiEligibleTextInput(input) {
+            const inputType = (input.type || 'text').toLowerCase();
+            if (!['text', 'search', ''].includes(inputType) && !(input instanceof HTMLTextAreaElement)) {
+                return false;
+            }
+
+            const allText = [
+                FieldDetector.getLabelText(input),
+                input.placeholder,
+                input.getAttribute('aria-label'),
+                FieldDetector.getAriaLabelledByText(input),
+                input.name,
+                input.id,
+                input.closest('div, fieldset, section, article')?.textContent?.slice(0, 500) || ''
+            ].filter(Boolean).join(' ').toLowerCase();
+
+            const obviousStructuredPatterns = [
+                'first name', 'last name', 'full name', 'email', 'phone', 'linkedin', 'city', 'state',
+                'postal', 'zip', 'address', 'country', 'website', 'portfolio', 'github', 'salary'
+            ];
+            if (obviousStructuredPatterns.some(pattern => allText.includes(pattern))) {
+                return false;
+            }
+
+            const aiPromptPatterns = [
+                'why', 'what', 'how', 'describe', 'tell us', 'tell me', 'superpower', 'kryptonite',
+                'cover letter', 'summary', 'motivation', 'interested', 'excited', 'fit for this role',
+                'experience', 'background', 'accomplishment', 'achievement', 'challenge', '?'
+            ];
+
+            return input instanceof HTMLTextAreaElement || aiPromptPatterns.some(pattern => allText.includes(pattern));
+        },
+
+        getAiQuestionPrompt(input) {
+            const promptParts = [];
+            const labelText = FieldDetector.getLabelText(input);
+            const ariaText = input.getAttribute('aria-label') || '';
+            const questionText = FieldDetector.getQuestionText(input);
+            const placeholder = input.placeholder || '';
+            const sectionText = input.closest('div, fieldset, section, article')?.textContent?.replace(/\s+/g, ' ').trim() || '';
+
+            if (labelText) promptParts.push(labelText);
+            if (ariaText && ariaText !== labelText) promptParts.push(ariaText);
+            if (questionText && !promptParts.includes(questionText)) promptParts.push(questionText);
+            if (placeholder && !promptParts.includes(placeholder)) promptParts.push(`Placeholder: ${placeholder}`);
+
+            const prompt = promptParts.join(' ').trim();
+            if (prompt.length >= 12) {
+                return prompt;
+            }
+
+            if (sectionText.includes('?')) {
+                const questionMatch = sectionText.match(/([^?.!]*\?)/);
+                if (questionMatch?.[1]) {
+                    return questionMatch[1].trim();
+                }
+            }
+
+            return sectionText.slice(0, 220).trim();
+        },
+
+        extractJobPostingText() {
+            const selectors = [
+                '[class*="job-description"]',
+                '[class*="description"]',
+                '[data-testid*="job-description"]',
+                'main',
+                'article'
+            ];
+
+            for (const selector of selectors) {
+                const nodes = Array.from(document.querySelectorAll(selector));
+                for (const node of nodes) {
+                    const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (text.length > 500 && this.looksLikeJobPostingText(text)) {
+                        return text.slice(0, 6000);
+                    }
+                }
+            }
+
+            const bodyText = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+            return this.looksLikeJobPostingText(bodyText) ? bodyText.slice(0, 6000) : bodyText.slice(0, 2500);
+        },
+
+        looksLikeJobPostingText(text) {
+            const normalizedText = this.normalizeText(text);
+            const indicators = [
+                'what you will do',
+                'what we are looking for',
+                'responsibilities',
+                'qualifications',
+                'about us',
+                'job description',
+                'requirements'
+            ];
+
+            return indicators.some(indicator => normalizedText.includes(this.normalizeText(indicator)));
         },
 
         /**

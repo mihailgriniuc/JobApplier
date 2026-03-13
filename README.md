@@ -6,10 +6,11 @@ A Chrome extension that automates the completion of job application forms by sec
 
 - **One-Click Autofill**: Fill job application forms instantly with your saved information
 - **Smart Field Detection**: Intelligently matches form fields using multiple detection methods
-- **100% Local Storage**: All data stored on your device - never transmitted externally
+- **Local-First Storage**: All data is stored on your device by default
 - **Resume Upload**: Automatically attach your resume to file input fields
 - **Keyboard Shortcuts**: Quick access with ⌘+Shift+F (Mac) or Ctrl+Shift+F (Windows)
 - **Import/Export**: Backup and restore your data as JSON
+- **Optional AI Answers**: Use your own Mistral API key to draft answers for open-ended screening questions
 
 ## Supported Data Fields
 
@@ -83,6 +84,15 @@ A floating "Autofill" button appears on detected job pages - just click it!
 - **Mac**: ⌘ + Shift + F
 - **Windows/Linux**: Ctrl + Shift + F
 
+### Optional AI Answers
+1. Open Settings in the extension
+2. Enable AI answers
+3. Paste your Mistral API key
+4. Optionally add extra resume context such as achievements or a short professional summary
+5. Run autofill on a job application page with open-ended text questions
+
+The extension continues filling structured fields locally. When AI answers are enabled, it also sends the manual question, relevant job-posting text, your saved profile fields, and any extra context you provided to Mistral to draft a short answer.
+
 ## File Structure
 
 ```
@@ -117,8 +127,8 @@ JobApplier/
 
 ## Privacy & Security
 
-- **Local Only**: All data stored using Chrome's local storage API
-- **No Transmission**: Data never leaves your device
+- **Local First**: All profile data is stored using Chrome's local storage API
+- **Optional AI Transmission**: If you enable AI answers, the extension sends only the prompt context needed to generate an answer to Mistral using your API key
 - **User Control**: View, edit, export, or delete your data anytime
 - **No Tracking**: No analytics or user behavior tracking
 
@@ -145,6 +155,7 @@ See [PRIVACY_POLICY.html](docs/PRIVACY_POLICY.html) for full details.
 - Some highly customized forms may require manual field filling
 - File upload may not work on all sites due to security restrictions
 - Multi-page forms require triggering autofill on each page
+- Resume PDF/DOCX content is not parsed directly for AI answers; use the AI extra-context field for resume highlights you want the model to reference
 
 ## License
 

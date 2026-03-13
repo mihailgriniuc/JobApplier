@@ -9,6 +9,9 @@
         "tabs",
         "scripting"
     ],
+    "host_permissions": [
+        "https://api.mistral.ai/*"
+    ],
     "action": {
         "default_popup": "popup/popup.html",
         "default_icon": {
