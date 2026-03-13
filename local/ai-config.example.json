@@ -1,0 +1,10 @@
+{
+  "aiAssist": {
+    "apiKey": "paste-your-mistral-api-key-here",
+    "model": "mistral-small-latest",
+    "enabled": false,
+    "extraContext": "",
+    "maxCharacters": 320,
+    "maxQuestionsPerRun": 3
+  }
+}

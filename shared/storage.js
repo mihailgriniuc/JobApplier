@@ -13,6 +13,8 @@ const StorageKeys = {
 
 const CURRENT_SCHEMA_VERSION = 1;
 
+let localAiConfigCache = null;
+
 const DEFAULT_SETTINGS = {
     autoDetect: true,
     showIndicators: true,
@@ -26,6 +28,29 @@ const DEFAULT_SETTINGS = {
         maxQuestionsPerRun: 3
     }
 };
+
+async function loadLocalAiConfig() {
+    if (localAiConfigCache) {
+        return localAiConfigCache;
+    }
+
+    try {
+        const response = await fetch(chrome.runtime.getURL('local/ai-config.local.json'), {
+            cache: 'no-store'
+        });
+
+        if (!response.ok) {
+            localAiConfigCache = {};
+            return localAiConfigCache;
+        }
+
+        localAiConfigCache = await response.json();
+        return localAiConfigCache;
+    } catch (error) {
+        localAiConfigCache = {};
+        return localAiConfigCache;
+    }
+}
 
 function sanitizeAiAssistSettings(aiAssist) {
     const maxCharacters = Number(aiAssist?.maxCharacters);
@@ -190,7 +215,18 @@ const Storage = {
      */
     async getSettings() {
         const result = await chrome.storage.local.get([StorageKeys.SETTINGS]);
-        return normalizeSettings(result[StorageKeys.SETTINGS]);
+        const settings = normalizeSettings(result[StorageKeys.SETTINGS]);
+        const localAiConfig = await loadLocalAiConfig();
+        const localAiSettings = sanitizeAiAssistSettings(localAiConfig.aiAssist);
+
+        return {
+            ...settings,
+            aiAssist: {
+                ...localAiSettings,
+                ...settings.aiAssist,
+                apiKey: settings.aiAssist?.apiKey || localAiSettings.apiKey || ''
+            }
+        };
     },
 
     /**

@@ -20,6 +20,7 @@ const INJECTION_RETRY_DELAY_MS = 150;
 const USER_DATA_STORAGE_KEY = 'jobAutofill_userData';
 const SETTINGS_STORAGE_KEY = 'jobAutofill_settings';
 const MISTRAL_API_URL = 'https://api.mistral.ai/v1/chat/completions';
+let localAiConfigCache = null;
 
 function getDefaultAiAssistSettings() {
     return {
@@ -32,9 +33,35 @@ function getDefaultAiAssistSettings() {
     };
 }
 
+async function loadLocalAiConfig() {
+    if (localAiConfigCache) {
+        return localAiConfigCache;
+    }
+
+    try {
+        const response = await fetch(chrome.runtime.getURL('local/ai-config.local.json'), {
+            cache: 'no-store'
+        });
+
+        if (!response.ok) {
+            localAiConfigCache = {};
+            return localAiConfigCache;
+        }
+
+        localAiConfigCache = await response.json();
+        return localAiConfigCache;
+    } catch (error) {
+        localAiConfigCache = {};
+        return localAiConfigCache;
+    }
+}
+
 async function getStoredSettings() {
     const result = await chrome.storage.local.get([SETTINGS_STORAGE_KEY]);
     const settings = result[SETTINGS_STORAGE_KEY] || {};
+    const localAiConfig = await loadLocalAiConfig();
+    const localAiSettings = localAiConfig.aiAssist || {};
+    const storedAiSettings = settings.aiAssist || {};
 
     return {
         autoDetect: settings.autoDetect !== false,
@@ -42,7 +69,9 @@ async function getStoredSettings() {
         confirmBeforeFill: settings.confirmBeforeFill === true,
         aiAssist: {
             ...getDefaultAiAssistSettings(),
-            ...(settings.aiAssist || {})
+            ...localAiSettings,
+            ...storedAiSettings,
+            apiKey: storedAiSettings.apiKey || localAiSettings.apiKey || ''
         }
     };
 }
