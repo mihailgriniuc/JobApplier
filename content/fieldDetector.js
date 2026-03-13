@@ -255,6 +255,87 @@ const FieldDetector = {
         return ` ${normalizedText} `.includes(` ${normalizedPattern} `);
     },
 
+    getElementDebugDescriptor(input) {
+        if (!input) {
+            return '';
+        }
+
+        const tagName = (input.tagName || '').toLowerCase();
+        const type = (input.type || '').toLowerCase();
+        const name = input.name ? `[name="${input.name}"]` : '';
+        const id = input.id ? `#${input.id}` : '';
+
+        return `${tagName}${type ? `(${type})` : ''}${id}${name}`;
+    },
+
+    getFieldDebugContext(input) {
+        const labelText = this.getLabelText(input);
+        const questionText = this.getQuestionText(input);
+        const inputName = input.name || '';
+        const inputId = input.id || '';
+        const placeholder = input.placeholder || '';
+        const inputType = input.type || '';
+        const ariaLabel = input.getAttribute('aria-label') || '';
+        const ariaLabelledBy = this.getAriaLabelledByText(input);
+        const containerText = (input.closest('div, fieldset, section, article')?.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 300);
+        const allText = `${labelText} ${questionText} ${inputName} ${inputId} ${placeholder} ${ariaLabel} ${ariaLabelledBy} ${containerText}`;
+
+        return {
+            descriptor: this.getElementDebugDescriptor(input),
+            tagName: (input.tagName || '').toLowerCase(),
+            inputType: inputType.toLowerCase(),
+            name: inputName,
+            id: inputId,
+            placeholder,
+            labelText,
+            questionText,
+            ariaLabel,
+            ariaLabelledBy,
+            containerText,
+            normalizedAllText: this.normalizeText(allText)
+        };
+    },
+
+    isCustomComboboxInput(input) {
+        if (!input || (input.tagName || '').toLowerCase() !== 'input') {
+            return false;
+        }
+
+        return Boolean(
+            input.closest('[role="combobox"]') ||
+            input.closest('[aria-haspopup="listbox"]') ||
+            input.closest('.select__control') ||
+            input.closest('.select__value-container') ||
+            input.classList.contains('select__input') ||
+            input.getAttribute('aria-autocomplete') === 'list' ||
+            input.getAttribute('role') === 'combobox'
+        );
+    },
+
+    getFieldSkipReason(input) {
+        if (!input) {
+            return 'missing-element';
+        }
+
+        if (input.type === 'hidden') return 'hidden-input';
+        if (input.type === 'submit') return 'submit-input';
+        if (input.type === 'button') return 'button-input';
+        if (input.type === 'file') return 'file-input';
+        if (this.isCustomComboboxInput(input)) return 'custom-combobox-input';
+
+        return null;
+    },
+
+    buildFieldDetectionResult(fieldType, reason, matchedBy, matchedValue, context) {
+        return {
+            fieldType,
+            reason,
+            matchedBy,
+            matchedValue,
+            context
+        };
+    },
+
     classifyBinaryQuestionType(questionText) {
         const normalizedQuestion = this.normalizeText(questionText);
         if (!normalizedQuestion) {
@@ -377,25 +458,72 @@ const FieldDetector = {
         return null;
     },
 
-    detectFields() {
+    detectFields(options = {}) {
         const detectedFields = {};
+        const diagnostics = {
+            detected: [],
+            unmatched: [],
+            skipped: []
+        };
         const inputs = document.querySelectorAll('input, select, textarea');
 
         inputs.forEach(input => {
             // Skip hidden, submit, button, checkbox (for individual checkboxes), file inputs
-            if (input.type === 'hidden' || input.type === 'submit' ||
-                input.type === 'button' || input.type === 'file') {
+            const skipReason = this.getFieldSkipReason(input);
+            if (skipReason) {
+                if (options.includeDiagnostics) {
+                    diagnostics.skipped.push({
+                        status: 'skipped',
+                        reason: skipReason,
+                        context: this.getFieldDebugContext(input)
+                    });
+                }
                 return;
             }
 
-            const fieldType = this.identifyFieldType(input);
-            if (fieldType) {
-                if (!detectedFields[fieldType]) {
-                    detectedFields[fieldType] = [];
+            const result = this.identifyFieldType(input, { includeMeta: true });
+            if (result.fieldType) {
+                if (!detectedFields[result.fieldType]) {
+                    detectedFields[result.fieldType] = [];
                 }
-                detectedFields[fieldType].push(input);
+                detectedFields[result.fieldType].push(input);
+
+                if (options.includeDiagnostics) {
+                    diagnostics.detected.push({
+                        status: 'detected',
+                        fieldType: result.fieldType,
+                        reason: result.reason,
+                        matchedBy: result.matchedBy,
+                        matchedValue: result.matchedValue,
+                        context: result.context
+                    });
+                }
+            } else if (options.includeDiagnostics) {
+                diagnostics.unmatched.push({
+                    status: 'unmatched',
+                    reason: result.reason,
+                    context: result.context
+                });
             }
         });
+
+        if (options.includeDiagnostics) {
+            return {
+                detectedFields,
+                detected: diagnostics.detected,
+                unmatched: diagnostics.unmatched,
+                skipped: diagnostics.skipped,
+                summary: {
+                    totalInputs: inputs.length,
+                    detectedCount: diagnostics.detected.length,
+                    unmatchedCount: diagnostics.unmatched.length,
+                    skippedCount: diagnostics.skipped.length,
+                    detectedTypes: Object.fromEntries(
+                        Object.entries(detectedFields).map(([fieldType, fieldInputs]) => [fieldType, fieldInputs.length])
+                    )
+                }
+            };
+        }
 
         return detectedFields;
     },
@@ -405,45 +533,65 @@ const FieldDetector = {
      * @param {HTMLElement} input 
      * @returns {string|null} Field type or null if not recognized
      */
-    identifyFieldType(input) {
-        const labelText = this.getLabelText(input).toLowerCase();
-        const questionText = this.getQuestionText(input).toLowerCase();
-        const inputName = (input.name || '').toLowerCase();
-        const inputId = (input.id || '').toLowerCase();
-        const placeholder = (input.placeholder || '').toLowerCase();
-        const inputType = (input.type || '').toLowerCase();
-        const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
-        const ariaLabelledBy = this.getAriaLabelledByText(input).toLowerCase();
-        const containerText = (input.closest('div, fieldset, section, article')?.textContent || '').toLowerCase().slice(0, 300);
-
-        const allText = `${labelText} ${questionText} ${inputName} ${inputId} ${placeholder} ${ariaLabel} ${ariaLabelledBy} ${containerText}`;
-        const normalizedAllText = this.normalizeText(allText);
+    identifyFieldType(input, options = {}) {
+        const context = this.getFieldDebugContext(input);
+        const labelText = context.labelText.toLowerCase();
+        const questionText = context.questionText.toLowerCase();
+        const inputName = context.name.toLowerCase();
+        const inputId = context.id.toLowerCase();
+        const placeholder = context.placeholder.toLowerCase();
+        const inputType = context.inputType;
+        const ariaLabel = context.ariaLabel.toLowerCase();
+        const ariaLabelledBy = context.ariaLabelledBy.toLowerCase();
+        const containerText = context.containerText.toLowerCase();
+        const normalizedAllText = context.normalizedAllText;
 
         const isPreferredFirstNameField =
-            allText.includes('preferred') &&
-            (allText.includes('first') || allText.includes('given') || allText.includes('go by') || allText.includes('chosen'));
+            normalizedAllText.includes('preferred') &&
+            (normalizedAllText.includes('first') || normalizedAllText.includes('given') || normalizedAllText.includes('go by') || normalizedAllText.includes('chosen'));
 
         if (isPreferredFirstNameField) {
-            return 'preferredFirstName';
+            const result = this.buildFieldDetectionResult(
+                'preferredFirstName',
+                'matched preferred first-name heuristic',
+                'heuristic',
+                'preferred first name',
+                context
+            );
+            return options.includeMeta ? result : result.fieldType;
         }
 
         const isExcludedNameField =
-            allText.includes('nickname') ||
-            allText.includes('name pronunciation') ||
-            allText.includes('pronunciation') ||
-            allText.includes('pronounciation') ||
-            allText.includes('phonetic') ||
-            allText.includes('how to pronounce');
+            normalizedAllText.includes('nickname') ||
+            normalizedAllText.includes('name pronunciation') ||
+            normalizedAllText.includes('pronunciation') ||
+            normalizedAllText.includes('pronounciation') ||
+            normalizedAllText.includes('phonetic') ||
+            normalizedAllText.includes('how to pronounce');
 
         if (isExcludedNameField) {
-            return null;
+            const result = this.buildFieldDetectionResult(
+                null,
+                'excluded pronunciation or nickname field',
+                'exclusion',
+                'nickname/pronunciation',
+                context
+            );
+            return options.includeMeta ? result : result.fieldType;
         }
 
         // Check each field type
         for (const [fieldType, patterns] of Object.entries(this.patterns)) {
             // Check type attribute
             if (patterns.types && patterns.types.includes(inputType)) {
-                return fieldType;
+                const result = this.buildFieldDetectionResult(
+                    fieldType,
+                    'matched input type',
+                    'type',
+                    inputType,
+                    context
+                );
+                return options.includeMeta ? result : result.fieldType;
             }
 
             // Check labels
@@ -454,7 +602,14 @@ const FieldDetector = {
                         this.containsNormalizedPhrase(ariaLabel, label) ||
                         this.containsNormalizedPhrase(ariaLabelledBy, label)
                     ) {
-                        return fieldType;
+                        const result = this.buildFieldDetectionResult(
+                            fieldType,
+                            'matched label text',
+                            'label',
+                            label,
+                            context
+                        );
+                        return options.includeMeta ? result : result.fieldType;
                     }
                 }
             }
@@ -463,7 +618,14 @@ const FieldDetector = {
             if (patterns.names) {
                 for (const name of patterns.names) {
                     if (inputName.includes(name) || inputId.includes(name)) {
-                        return fieldType;
+                        const result = this.buildFieldDetectionResult(
+                            fieldType,
+                            'matched name or id',
+                            'name',
+                            name,
+                            context
+                        );
+                        return options.includeMeta ? result : result.fieldType;
                     }
                 }
             }
@@ -472,7 +634,14 @@ const FieldDetector = {
             if (patterns.placeholders) {
                 for (const ph of patterns.placeholders) {
                     if (this.containsNormalizedPhrase(placeholder, ph)) {
-                        return fieldType;
+                        const result = this.buildFieldDetectionResult(
+                            fieldType,
+                            'matched placeholder text',
+                            'placeholder',
+                            ph,
+                            context
+                        );
+                        return options.includeMeta ? result : result.fieldType;
                     }
                 }
             }
@@ -481,13 +650,27 @@ const FieldDetector = {
             if (patterns.questions) {
                 for (const q of patterns.questions) {
                     if (this.containsNormalizedPhrase(normalizedAllText, q)) {
-                        return fieldType;
+                        const result = this.buildFieldDetectionResult(
+                            fieldType,
+                            'matched question or container text',
+                            'question',
+                            q,
+                            context
+                        );
+                        return options.includeMeta ? result : result.fieldType;
                     }
                 }
             }
         }
 
-        return null;
+        const result = this.buildFieldDetectionResult(
+            null,
+            'no matching field pattern',
+            null,
+            null,
+            context
+        );
+        return options.includeMeta ? result : result.fieldType;
     },
 
     /**

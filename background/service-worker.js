@@ -91,7 +91,8 @@ function buildAiMessages(payload, aiSettings) {
                 'Do not invent employers, years, certifications, tools, or achievements not present in the context.',
                 'Answer only the specific question for the specific field shown in the prompt.',
                 'If helper text narrows the answer, follow it.',
-                isChoicePrompt ? 'When options are provided, return exactly one option label from the list. Do not explain your choice.' : '',
+                isChoicePrompt ? 'When options are provided, choose the single option that best matches the user profile for that field. Ignore unrelated profile details. For example, do not use location for ethnicity, disability, sponsorship, gender, veteran, or similar questions. Return exactly one option label from the list and do not explain your choice.' : '',
+                isChoicePrompt && payload.preferredProfileAnswer ? `The saved profile answer for this field is: ${payload.preferredProfileAnswer}. You must choose the option that matches this saved answer and never choose the opposite meaning.` : '',
                 'Answer in first person, keep it professional but natural, and tailor it to the job posting when relevant.',
                 `Return plain text only and keep the answer under ${maxCharacters} characters unless the question explicitly asks for more detail.`
             ].join(' ')
@@ -103,6 +104,8 @@ function buildAiMessages(payload, aiSettings) {
                 `Field label/context: ${payload.fieldLabel || ''}`,
                 payload.helperText ? `Helper text: ${payload.helperText}` : '',
                 payload.sectionContext ? `Nearby section text: ${payload.sectionContext}` : '',
+                payload.detectedFieldType ? `Detected field type: ${payload.detectedFieldType}` : '',
+                payload.preferredProfileAnswer ? `Saved profile answer: ${payload.preferredProfileAnswer}` : '',
                 payload.fieldHtmlType ? `Field type: ${payload.fieldHtmlType}` : '',
                 isChoicePrompt ? `Available options:\n${choiceOptions.map((option, index) => `${index + 1}. ${option}`).join('\n')}` : '',
                 `Page title: ${payload.pageTitle || ''}`,
