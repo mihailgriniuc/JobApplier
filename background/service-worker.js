@@ -24,7 +24,7 @@ let localAiConfigCache = null;
 
 function getDefaultAiAssistSettings() {
     return {
-        enabled: false,
+        enabled: true,
         model: 'mistral-small-latest',
         apiKey: '',
         extraContext: '',
@@ -79,6 +79,8 @@ async function getStoredSettings() {
 function buildAiMessages(payload, aiSettings) {
     const maxCharacters = Math.max(80, Math.min(Number(aiSettings.maxCharacters) || 320, 1200));
     const userProfile = JSON.stringify(payload.userProfile || {}, null, 2);
+    const choiceOptions = Array.isArray(payload.choiceOptions) ? payload.choiceOptions.filter(Boolean) : [];
+    const isChoicePrompt = choiceOptions.length > 0;
 
     return [
         {
@@ -87,6 +89,9 @@ function buildAiMessages(payload, aiSettings) {
                 'You write concise, job-application answers for screening questions.',
                 'Use only the provided profile, job posting, and extra context.',
                 'Do not invent employers, years, certifications, tools, or achievements not present in the context.',
+                'Answer only the specific question for the specific field shown in the prompt.',
+                'If helper text narrows the answer, follow it.',
+                isChoicePrompt ? 'When options are provided, return exactly one option label from the list. Do not explain your choice.' : '',
                 'Answer in first person, keep it professional but natural, and tailor it to the job posting when relevant.',
                 `Return plain text only and keep the answer under ${maxCharacters} characters unless the question explicitly asks for more detail.`
             ].join(' ')
@@ -96,6 +101,10 @@ function buildAiMessages(payload, aiSettings) {
             content: [
                 `Question: ${payload.question || ''}`,
                 `Field label/context: ${payload.fieldLabel || ''}`,
+                payload.helperText ? `Helper text: ${payload.helperText}` : '',
+                payload.sectionContext ? `Nearby section text: ${payload.sectionContext}` : '',
+                payload.fieldHtmlType ? `Field type: ${payload.fieldHtmlType}` : '',
+                isChoicePrompt ? `Available options:\n${choiceOptions.map((option, index) => `${index + 1}. ${option}`).join('\n')}` : '',
                 `Page title: ${payload.pageTitle || ''}`,
                 'User profile:',
                 userProfile,

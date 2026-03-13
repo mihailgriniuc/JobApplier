@@ -39,7 +39,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     const autoDetectToggle = document.getElementById('autoDetectToggle');
     const showIndicatorsToggle = document.getElementById('showIndicatorsToggle');
     const confirmFillToggle = document.getElementById('confirmFillToggle');
-    const aiAssistToggle = document.getElementById('aiAssistToggle');
     const mistralApiKeyInput = document.getElementById('mistralApiKeyInput');
     const aiModelInput = document.getElementById('aiModelInput');
     const aiMaxCharactersInput = document.getElementById('aiMaxCharactersInput');
@@ -176,7 +175,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         autoDetectToggle.checked = settings.autoDetect !== false;
         showIndicatorsToggle.checked = settings.showIndicators !== false;
         confirmFillToggle.checked = settings.confirmBeforeFill === true;
-        aiAssistToggle.checked = settings.aiAssist?.enabled === true;
         mistralApiKeyInput.value = settings.aiAssist?.apiKey || '';
         aiModelInput.value = settings.aiAssist?.model || 'mistral-small-latest';
         aiMaxCharactersInput.value = settings.aiAssist?.maxCharacters || 320;
@@ -276,7 +274,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     autoDetectToggle.addEventListener('change', saveSettings);
     showIndicatorsToggle.addEventListener('change', saveSettings);
     confirmFillToggle.addEventListener('change', saveSettings);
-    aiAssistToggle.addEventListener('change', saveSettings);
     mistralApiKeyInput.addEventListener('change', saveSettings);
     aiModelInput.addEventListener('change', saveSettings);
     aiMaxCharactersInput.addEventListener('change', saveSettings);
@@ -289,7 +286,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             showIndicators: showIndicatorsToggle.checked,
             confirmBeforeFill: confirmFillToggle.checked,
             aiAssist: {
-                enabled: aiAssistToggle.checked,
+                enabled: true,
                 apiKey: mistralApiKeyInput.value.trim(),
                 model: aiModelInput.value.trim() || 'mistral-small-latest',
                 maxCharacters: Number(aiMaxCharactersInput.value) || 320,

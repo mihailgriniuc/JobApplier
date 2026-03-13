@@ -6,6 +6,11 @@
 const FieldDetector = {
     // Field type patterns for detection
     patterns: {
+        preferredFirstName: {
+            labels: ['preferred first name', 'preferred given name', 'chosen first name', 'first name you go by', 'name you go by', 'preferred name'],
+            names: ['preferredfirstname', 'preferred_first_name', 'preferredgivenname', 'preferredname', 'chosenname', 'nameyougoby'],
+            placeholders: ['preferred first name', 'name you go by', 'chosen name']
+        },
         firstName: {
             labels: ['first name', 'first-name', 'firstname', 'given name', 'forename'],
             names: ['firstname', 'first_name', 'first-name', 'fname', 'givenname', 'given_name'],
@@ -32,6 +37,14 @@ const FieldDetector = {
             names: ['phone', 'telephone', 'mobile', 'cell', 'phonenumber', 'phone_number', 'tel'],
             placeholders: ['phone', 'telephone', 'mobile', '(555)', '123-4567'],
             types: ['tel']
+        },
+        phoneCountryCode: {
+            labels: ['country code for phone number', 'phone country code', 'country code', 'dial code', 'calling code'],
+            names: ['countrycode', 'country_code', 'phonecountrycode', 'phone_country_code', 'dialcode', 'callingcode'],
+            placeholders: ['+1', 'country code', 'dial code'],
+            options: {
+                us: ['+1', '1', 'united states (+1)', 'us (+1)', 'usa (+1)', 'united states']
+            }
         },
         linkedin: {
             labels: ['linkedin', 'linkedin profile', 'linkedin url'],
@@ -63,9 +76,9 @@ const FieldDetector = {
             }
         },
         sponsorship: {
-            labels: ['sponsorship', 'visa sponsorship', 'require sponsorship', 'need sponsorship', 'immigration sponsorship', 'will you now or in the future require', 'will you now, or in the future, require', 'require visa', 'need visa', 'continue working in the United States', 'employment visa status', 'visa status', 'work visa'],
+            labels: ['sponsorship', 'visa sponsorship', 'require sponsorship', 'need sponsorship', 'immigration sponsorship', 'will you now or in the future require', 'will you now, or in the future, require', 'require visa', 'need visa', 'continue working in the United States', 'employment visa status', 'visa status', 'work visa', 'employment sponsorship', 'current or future sponsorship', 'need work authorization sponsorship', 'need immigration support'],
             names: ['sponsorship', 'visasponsorship', 'visa_sponsorship', 'requiresponsorship', 'futuresponsor', 'visa'],
-            questions: ['require sponsorship', 'need sponsorship', 'visa', 'immigration', 'will you now or in the future', 'will you now, or in the future', 'sponsor', 'employment visa', 'employment visa status', 'visa status', 'work visa', 'continue working'],
+            questions: ['require sponsorship', 'need sponsorship', 'visa', 'immigration', 'will you now or in the future', 'will you now, or in the future', 'sponsor', 'employment visa', 'employment visa status', 'visa status', 'work visa', 'continue working', 'employment sponsorship', 'current or future sponsorship', 'require employer sponsorship', 'employment-based immigration', 'need immigration support', 'dependent on visa'],
             options: {
                 yes: ['yes', 'true', 'will require', 'sponsorship'],
                 no: ['no', 'false', 'will not require', 'do not require']
@@ -129,8 +142,9 @@ const FieldDetector = {
             }
         },
         gender: {
-            labels: ['gender', 'sex'],
+            labels: ['gender', 'sex', 'gender identity', 'gender identification', 'identify your gender', 'how do you identify'],
             names: ['gender', 'sex'],
+            questions: ['gender identity', 'gender identification', 'identify your gender', 'how do you identify', 'gender'],
             options: {
                 male: ['male', 'm', 'man'],
                 female: ['female', 'f', 'woman'],
@@ -173,8 +187,9 @@ const FieldDetector = {
             }
         },
         hispanicLatino: {
-            labels: ['hispanic', 'latino', 'latina', 'latinx', 'hispanic/latino', 'hispanic or latino', 'are you hispanic'],
+            labels: ['hispanic', 'latino', 'latina', 'latinx', 'hispanic/latino', 'hispanic or latino', 'are you hispanic', 'are you hispanic/latino'],
             names: ['hispanic', 'latino', 'hispaniclatino', 'hispanic_latino', 'ethnicity'],
+            questions: ['are you hispanic', 'are you hispanic latino', 'hispanic or latino', 'hispanic latino identification'],
             options: {
                 yes: ['yes', 'hispanic', 'latino', 'latina', 'latinx'],
                 no: ['no', 'not hispanic', 'not latino'],
@@ -196,8 +211,9 @@ const FieldDetector = {
             }
         },
         veteran: {
-            labels: ['veteran', 'veteran status', 'military', 'protected veteran'],
+            labels: ['veteran', 'veteran status', 'military', 'protected veteran', 'protected veteran status', 'military service'],
             names: ['veteran', 'veteranstatus', 'veteran_status', 'protectedveteran'],
+            questions: ['veteran status', 'protected veteran', 'military service', 'served in the military'],
             options: {
                 not_veteran: ['not a protected veteran', 'not a veteran', 'no'],
                 disabled_veteran: ['disabled veteran'],
@@ -208,8 +224,9 @@ const FieldDetector = {
             }
         },
         disability: {
-            labels: ['disability', 'disabled'],
+            labels: ['disability', 'disabled', 'disability status', 'self identify disability', 'voluntary self identification of disability'],
             names: ['disability', 'disabilitystatus', 'disability_status'],
+            questions: ['have a disability', 'disability status', 'self identify disability', 'voluntary self identification of disability'],
             options: {
                 yes: ['yes', 'have a disability'],
                 no: ['no', 'do not have'],
@@ -256,9 +273,15 @@ const FieldDetector = {
             normalizedQuestion.includes('require the company to sponsor') ||
             normalizedQuestion.includes('require sponsorship') ||
             normalizedQuestion.includes('need sponsorship') ||
+            normalizedQuestion.includes('employment sponsorship') ||
+            normalizedQuestion.includes('current or future sponsorship') ||
+            normalizedQuestion.includes('require employer sponsorship') ||
+            normalizedQuestion.includes('need immigration support') ||
+            normalizedQuestion.includes('dependent on visa') ||
             normalizedQuestion.includes('visa sponsorship') ||
             normalizedQuestion.includes('immigration sponsorship') ||
             normalizedQuestion.includes('employment based immigration case') ||
+            normalizedQuestion.includes('employment based immigration') ||
             normalizedQuestion.includes('h 1b') ||
             normalizedQuestion.includes('stem opt') ||
             normalizedQuestion.includes('work visa') ||
@@ -384,18 +407,27 @@ const FieldDetector = {
      */
     identifyFieldType(input) {
         const labelText = this.getLabelText(input).toLowerCase();
+        const questionText = this.getQuestionText(input).toLowerCase();
         const inputName = (input.name || '').toLowerCase();
         const inputId = (input.id || '').toLowerCase();
         const placeholder = (input.placeholder || '').toLowerCase();
         const inputType = (input.type || '').toLowerCase();
         const ariaLabel = (input.getAttribute('aria-label') || '').toLowerCase();
         const ariaLabelledBy = this.getAriaLabelledByText(input).toLowerCase();
+        const containerText = (input.closest('div, fieldset, section, article')?.textContent || '').toLowerCase().slice(0, 300);
 
-        const allText = `${labelText} ${inputName} ${inputId} ${placeholder} ${ariaLabel} ${ariaLabelledBy}`;
+        const allText = `${labelText} ${questionText} ${inputName} ${inputId} ${placeholder} ${ariaLabel} ${ariaLabelledBy} ${containerText}`;
         const normalizedAllText = this.normalizeText(allText);
 
+        const isPreferredFirstNameField =
+            allText.includes('preferred') &&
+            (allText.includes('first') || allText.includes('given') || allText.includes('go by') || allText.includes('chosen'));
+
+        if (isPreferredFirstNameField) {
+            return 'preferredFirstName';
+        }
+
         const isExcludedNameField =
-            (allText.includes('preferred') && allText.includes('name')) ||
             allText.includes('nickname') ||
             allText.includes('name pronunciation') ||
             allText.includes('pronunciation') ||

@@ -20,7 +20,7 @@ const DEFAULT_SETTINGS = {
     showIndicators: true,
     confirmBeforeFill: false,
     aiAssist: {
-        enabled: false,
+        enabled: true,
         model: 'mistral-small-latest',
         apiKey: '',
         extraContext: '',
@@ -59,7 +59,7 @@ function sanitizeAiAssistSettings(aiAssist) {
     return {
         ...DEFAULT_SETTINGS.aiAssist,
         ...(aiAssist || {}),
-        enabled: aiAssist?.enabled === true,
+        enabled: true,
         model: (aiAssist?.model || DEFAULT_SETTINGS.aiAssist.model).trim() || DEFAULT_SETTINGS.aiAssist.model,
         apiKey: (aiAssist?.apiKey || '').trim(),
         extraContext: (aiAssist?.extraContext || '').trim(),

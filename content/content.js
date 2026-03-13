@@ -6,6 +6,14 @@
 (function () {
     'use strict';
 
+    const GREENHOUSE_SELECT_CLASSES = {
+        input: 'select__input',
+        control: 'select__control',
+        menu: 'select__menu',
+        option: 'select__option',
+        indicator: 'select__indicator'
+    };
+
     // Prevent multiple initializations
     if (window.jobAutofillInitialized) return;
     window.jobAutofillInitialized = true;
@@ -411,6 +419,9 @@
                 // Fill select dropdowns
                 this.fillSelectFields(detectedFields);
 
+                // Fill custom combobox controls used by Greenhouse and similar forms.
+                await this.fillCustomComboboxFields();
+
                 // Fill Hispanic/Latino dropdowns specifically  
                 this.fillHispanicLatinoSelects();
 
@@ -421,6 +432,9 @@
 
                 // Handle location autocomplete fields
                 await this.handleLocationAutocomplete();
+
+                // Use AI to resolve unanswered visible select/radio/checkbox choices.
+                await this.fillAiChoiceFields();
 
                 // Some sites re-render fields after location or select interactions.
                 const refreshedFields = FieldDetector.detectFields();
@@ -651,9 +665,11 @@
         fillTextFields(detectedFields) {
             const fieldMappings = {
                 fullName: this.userData.fullName,
+                preferredFirstName: this.parseFirstName(this.userData.fullName),
                 firstName: this.parseFirstName(this.userData.fullName),
                 lastName: this.parseLastName(this.userData.fullName),
                 email: this.userData.email,
+                phoneCountryCode: this.getDefaultPhoneCountryCode(),
                 phone: this.userData.phone,
                 linkedin: this.userData.linkedin,
                 city: this.userData.city,
@@ -695,17 +711,23 @@
                 return;
             }
 
+            console.log(`[JobAutofill] Found ${candidates.length} AI text question candidates`);
+
             const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 3, candidates.length));
             const jobPostingText = this.extractJobPostingText();
             const pageTitle = document.title || '';
 
             for (const candidate of candidates.slice(0, limit)) {
                 try {
+                    console.log(`[JobAutofill] Generating AI answer for: ${candidate.question}`);
                     const response = await chrome.runtime.sendMessage({
                         action: 'generateAiAnswer',
                         payload: {
                             question: candidate.question,
                             fieldLabel: candidate.label,
+                            helperText: candidate.helperText,
+                            sectionContext: candidate.sectionContext,
+                            fieldHtmlType: candidate.input instanceof HTMLTextAreaElement ? 'textarea' : 'text',
                             pageTitle,
                             jobPostingText,
                             userProfile: this.buildAiUserProfile()
@@ -729,8 +751,10 @@
         buildAiUserProfile() {
             return {
                 fullName: this.userData?.fullName || '',
+                firstName: this.parseFirstName(this.userData?.fullName || ''),
                 email: this.userData?.email || '',
                 phone: this.userData?.phone || '',
+                phoneCountryCode: this.getDefaultPhoneCountryCode(),
                 linkedin: this.userData?.linkedin || '',
                 location: this.formatLocation(),
                 workAuthorization: this.userData?.workAuth || '',
@@ -738,8 +762,917 @@
                 onsiteComfort: this.userData?.onsiteComfort || '',
                 relocationWillingness: this.userData?.relocationWillingness || '',
                 internshipStatus: this.userData?.internshipStatus || '',
-                startAvailability: this.userData?.startAvailability || ''
+                startAvailability: this.userData?.startAvailability || '',
+                gender: this.userData?.gender || '',
+                hispanicLatino: this.userData?.hispanicLatino || '',
+                veteran: this.userData?.veteran || '',
+                disability: this.userData?.disability || ''
             };
+        },
+
+        getStructuredChoiceFieldMappings() {
+            return {
+                phoneCountryCode: { value: 'us', patterns: FieldDetector.patterns.phoneCountryCode?.options || {} },
+                workAuth: { value: this.userData?.workAuth, patterns: FieldDetector.patterns.workAuth?.options || {} },
+                sponsorship: { value: this.userData?.sponsorship, patterns: FieldDetector.patterns.sponsorship?.options || {} },
+                gender: { value: this.userData?.gender, patterns: FieldDetector.patterns.gender?.options || {} },
+                transgender: { value: this.userData?.transgender, patterns: FieldDetector.patterns.transgender?.options || {} },
+                sexualOrientation: { value: this.userData?.sexualOrientation, patterns: FieldDetector.patterns.sexualOrientation?.options || {} },
+                pronouns: { value: this.userData?.pronouns, patterns: FieldDetector.patterns.pronouns?.options || {} },
+                hispanicLatino: { value: this.userData?.hispanicLatino || 'no', patterns: FieldDetector.patterns.hispanicLatino?.options || {} },
+                race: { value: this.userData?.race, patterns: FieldDetector.patterns.race?.options || {} },
+                veteran: { value: this.userData?.veteran, patterns: FieldDetector.patterns.veteran?.options || {} },
+                disability: { value: this.userData?.disability, patterns: FieldDetector.patterns.disability?.options || {} },
+                startAvailability: { value: this.userData?.startAvailability, patterns: FieldDetector.patterns.startAvailability?.options || {} },
+                onsiteComfort: { value: this.userData?.onsiteComfort, patterns: FieldDetector.patterns.onsiteComfort?.options || {} },
+                relocationWillingness: { value: this.userData?.relocationWillingness, patterns: FieldDetector.patterns.relocationWillingness?.options || {} },
+                internshipStatus: { value: this.userData?.internshipStatus, patterns: FieldDetector.patterns.internshipStatus?.options || {} },
+                over18: { value: this.userData?.over18, patterns: FieldDetector.patterns.over18?.options || {} },
+                formerEmployee: { value: this.userData?.formerEmployee, patterns: FieldDetector.patterns.formerEmployee?.options || {} }
+            };
+        },
+
+        getStructuredChoiceConfig(fieldType) {
+            return this.getStructuredChoiceFieldMappings()[fieldType] || null;
+        },
+
+        inferStructuredChoiceFieldType(...texts) {
+            const combinedText = texts
+                .filter(Boolean)
+                .map(text => (text || '').trim())
+                .join(' ');
+
+            const binaryFieldType = FieldDetector.classifyBinaryQuestionType(combinedText);
+            if (binaryFieldType) {
+                return binaryFieldType;
+            }
+
+            const normalizedText = this.normalizeText(combinedText);
+            if (!normalizedText) {
+                return null;
+            }
+
+            for (const fieldType of Object.keys(this.getStructuredChoiceFieldMappings())) {
+                if (binaryFieldType && fieldType === binaryFieldType) {
+                    return fieldType;
+                }
+
+                const patterns = FieldDetector.patterns[fieldType];
+                if (!patterns) continue;
+
+                const searchableTerms = [
+                    ...(patterns.labels || []),
+                    ...(patterns.questions || []),
+                    ...(patterns.names || [])
+                ];
+
+                if (searchableTerms.some(term => FieldDetector.containsNormalizedPhrase(normalizedText, term))) {
+                    return fieldType;
+                }
+            }
+
+            return null;
+        },
+
+        shouldSkipAiChoiceForProfile(context = {}) {
+            const fieldType = this.inferStructuredChoiceFieldType(
+                context.fieldType,
+                context.question,
+                context.label,
+                context.helperText,
+                context.sectionContext,
+                context.element?.name,
+                context.element?.id,
+                context.element?.getAttribute?.('aria-label') || '',
+                context.element?.getAttribute?.('aria-labelledby') || ''
+            );
+
+            if (!fieldType) {
+                return false;
+            }
+
+            const config = this.getStructuredChoiceConfig(fieldType);
+            return Boolean(config?.value);
+        },
+
+        findProfileChoiceOption(options, userValue, optionPatterns) {
+            if (!Array.isArray(options) || options.length === 0 || !userValue) {
+                return null;
+            }
+
+            const normalizedUserValue = this.normalizeText(userValue);
+            const patterns = (optionPatterns?.[userValue] || []).map(pattern => this.normalizeText(pattern));
+            let bestMatch = null;
+            let bestScore = -1;
+
+            for (const option of options) {
+                const optionText = option?.text || option?.textContent || option?.value || '';
+                const normalizedOptionText = this.normalizeText(optionText);
+                if (!normalizedOptionText) continue;
+
+                let score = 0;
+
+                if (normalizedOptionText === normalizedUserValue) {
+                    score += 100;
+                }
+
+                if (normalizedUserValue && FieldDetector.containsNormalizedPhrase(normalizedOptionText, normalizedUserValue)) {
+                    score += 35;
+                }
+
+                for (const pattern of patterns) {
+                    if (!pattern) continue;
+                    if (normalizedOptionText === pattern) {
+                        score += 80;
+                    } else if (FieldDetector.containsNormalizedPhrase(normalizedOptionText, pattern)) {
+                        score += 45;
+                    }
+                }
+
+                if (normalizedUserValue === 'yes') {
+                    if (normalizedOptionText.startsWith('yes') || normalizedOptionText === 'true') score += 30;
+                    if (normalizedOptionText.startsWith('no') || normalizedOptionText.includes(' will not ') || normalizedOptionText.includes(' do not ')) score -= 50;
+                }
+
+                if (normalizedUserValue === 'no') {
+                    if (normalizedOptionText.startsWith('no') || normalizedOptionText === 'false') score += 30;
+                    if (normalizedOptionText.startsWith('yes') || normalizedOptionText.includes(' will require ') || normalizedOptionText.includes(' do require ')) score -= 50;
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = option;
+                }
+            }
+
+            return bestScore > 0 ? bestMatch : null;
+        },
+
+        async fillCustomComboboxFields() {
+            const controls = this.sortElementsTopToBottom(this.getCustomComboboxElements());
+            if (controls.length === 0) {
+                return;
+            }
+
+            console.log(`[JobAutofill] Found ${controls.length} custom combobox controls`);
+
+            for (const control of controls) {
+                if (!this.isElementAllowed(control) || control.disabled) continue;
+                if (!this.isCustomComboboxUnanswered(control)) continue;
+
+                const resolved = await this.resolveCustomComboboxField(control);
+                if (!resolved) continue;
+
+                this.filledFields.push({ type: resolved.type, element: control });
+                this.highlightField(control, true);
+                console.log(`[JobAutofill] Selected ${resolved.type} custom combobox option: ${resolved.text}`);
+            }
+        },
+
+        async fillAiCustomComboboxFields() {
+            const aiSettings = this.settings?.aiAssist;
+            if (!aiSettings?.apiKey) {
+                return;
+            }
+
+            const controls = this.getCustomComboboxElements();
+            const candidates = [];
+
+            for (const control of controls) {
+                if (!this.isElementAllowed(control) || control.disabled) continue;
+                if (!this.isCustomComboboxUnanswered(control)) continue;
+
+                const context = this.getAiFieldContext(control);
+                if (!context.question || !this.looksLikeChoiceQuestion(context.question, context.sectionContext)) continue;
+                if (this.shouldSkipAiChoiceForProfile({ ...context, element: control })) continue;
+
+                const options = await this.getComboboxOptions(control);
+                if (options.length < 2 || options.length > 12) continue;
+
+                candidates.push({
+                    type: 'combobox',
+                    element: control,
+                    question: context.question,
+                    label: context.label,
+                    helperText: context.helperText,
+                    sectionContext: context.sectionContext,
+                    options
+                });
+            }
+
+            if (candidates.length === 0) {
+                return;
+            }
+
+            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 3, candidates.length));
+            const jobPostingText = this.extractJobPostingText();
+            const pageTitle = document.title || '';
+
+            for (const candidate of candidates.slice(0, limit)) {
+                try {
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'generateAiAnswer',
+                        payload: {
+                            question: candidate.question,
+                            fieldLabel: candidate.label,
+                            helperText: candidate.helperText,
+                            sectionContext: candidate.sectionContext,
+                            choiceOptions: candidate.options.map(option => option.text),
+                            fieldHtmlType: candidate.type,
+                            pageTitle,
+                            jobPostingText,
+                            userProfile: this.buildAiUserProfile()
+                        }
+                    });
+
+                    if (!response?.success || !response.answer) continue;
+
+                    const matchedOption = this.findBestAiChoiceMatch(candidate.options, response.answer);
+                    if (!matchedOption) continue;
+
+                    if (this.applyChoiceControl(matchedOption.element)) {
+                        this.filledFields.push({ type: 'aiComboboxChoice', element: candidate.element });
+                        this.highlightField(candidate.element, true);
+                        console.log(`[JobAutofill] AI selected custom combobox option: ${matchedOption.text}`);
+                    }
+                } catch (error) {
+                    console.warn('[JobAutofill] AI custom combobox selection failed:', error);
+                }
+            }
+        },
+
+        async resolveCustomComboboxField(control) {
+            const fieldType = this.identifyCustomChoiceFieldType(control);
+            const config = fieldType ? this.getStructuredChoiceConfig(fieldType) : null;
+            const options = await this.getComboboxOptions(control);
+
+            if (options.length === 0) {
+                return null;
+            }
+
+            if (config?.value) {
+                const matched = this.findProfileChoiceOption(options, config.value, config.patterns);
+                if (matched && await this.applyCustomComboboxSelection(control, matched)) {
+                    return {
+                        type: fieldType,
+                        text: matched.text,
+                        source: 'profile'
+                    };
+                }
+            }
+
+            const aiMatch = await this.resolveCustomComboboxWithAi(control, options, fieldType);
+            if (aiMatch) {
+                return aiMatch;
+            }
+
+            return null;
+        },
+
+        async resolveCustomComboboxWithAi(control, options, detectedFieldType = null) {
+            const aiSettings = this.settings?.aiAssist;
+            if (!aiSettings?.apiKey || !Array.isArray(options) || options.length < 2) {
+                return null;
+            }
+
+            const context = this.getAiFieldContext(control);
+            if (!context.question || !this.looksLikeChoiceQuestion(context.question, context.sectionContext)) {
+                return null;
+            }
+
+            try {
+                const response = await chrome.runtime.sendMessage({
+                    action: 'generateAiAnswer',
+                    payload: {
+                        question: context.question,
+                        fieldLabel: context.label,
+                        helperText: context.helperText,
+                        sectionContext: context.sectionContext,
+                        choiceOptions: options.map(option => option.text),
+                        fieldHtmlType: 'combobox',
+                        pageTitle: document.title || '',
+                        jobPostingText: this.extractJobPostingText(),
+                        userProfile: this.buildAiUserProfile()
+                    }
+                });
+
+                if (!response?.success || !response.answer) {
+                    return null;
+                }
+
+                const matchedOption = this.findBestAiChoiceMatch(options, response.answer);
+                if (!matchedOption || !await this.applyCustomComboboxSelection(control, matchedOption)) {
+                    return null;
+                }
+
+                return {
+                    type: detectedFieldType || 'aiComboboxChoice',
+                    text: matchedOption.text,
+                    source: 'ai'
+                };
+            } catch (error) {
+                console.warn('[JobAutofill] AI custom combobox selection failed:', error);
+                return null;
+            }
+        },
+
+        async applyCustomComboboxSelection(control, option) {
+            if (!control || !option?.element) {
+                return false;
+            }
+
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const input = root.querySelector(`input.${GREENHOUSE_SELECT_CLASSES.input}, .${GREENHOUSE_SELECT_CLASSES.input} input, input[type="text"]`);
+            const beforeSelection = this.normalizeText(this.getCustomComboboxSelectionText(root));
+            const expectedSelection = this.normalizeText(option.text || option.element.textContent || '');
+
+            if (!expectedSelection) {
+                return false;
+            }
+
+            option.element.scrollIntoView?.({ block: 'nearest' });
+
+            if (input) {
+                input.focus();
+                input.dispatchEvent(new Event('focus', { bubbles: true }));
+            } else {
+                root.focus?.();
+            }
+
+            const target = option.element;
+            target.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new PointerEvent('pointerover', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+            target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+
+            if (input) {
+                input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter' }));
+                input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter' }));
+            } else {
+                root.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter' }));
+                root.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'Enter', code: 'Enter' }));
+            }
+
+            for (let attempt = 0; attempt < 6; attempt += 1) {
+                await new Promise(resolve => setTimeout(resolve, 80));
+
+                const currentSelection = this.normalizeText(this.getCustomComboboxSelectionText(root));
+                const optionMarkedSelected =
+                    target.getAttribute('aria-selected') === 'true' ||
+                    target.classList.contains('select__option--is-selected') ||
+                    target.getAttribute('data-selected') === 'true';
+
+                const selectionChanged = currentSelection && currentSelection !== beforeSelection;
+                const matchesExpected = currentSelection === expectedSelection ||
+                    currentSelection.includes(expectedSelection) ||
+                    expectedSelection.includes(currentSelection);
+
+                if ((selectionChanged && matchesExpected) || optionMarkedSelected) {
+                    root.dispatchEvent(new Event('change', { bubbles: true }));
+                    root.dispatchEvent(new Event('blur', { bubbles: true }));
+                    return true;
+                }
+            }
+
+            return false;
+        },
+
+        getCustomComboboxElements() {
+            const selector = [
+                '[role="combobox"]',
+                'button[aria-haspopup="listbox"]',
+                '[aria-haspopup="listbox"][aria-expanded]',
+                `.${GREENHOUSE_SELECT_CLASSES.control}`,
+                `.${GREENHOUSE_SELECT_CLASSES.control} input`,
+                `.${GREENHOUSE_SELECT_CLASSES.indicator}`,
+                '[data-testid*="select"] button',
+                '[data-qa*="select"] button'
+            ].join(', ');
+
+            const controls = [];
+            const seen = new Set();
+
+            for (const element of document.querySelectorAll(selector)) {
+                if (!element || !element.isConnected) continue;
+                if (element.tagName === 'SELECT') continue;
+
+                const control = this.resolveCustomComboboxControl(element);
+                if (!control) continue;
+
+                const identity = control.getAttribute('id') || control.getAttribute('aria-labelledby') || control.outerHTML.slice(0, 180);
+                if (seen.has(identity)) continue;
+
+                const text = this.normalizeText(control.textContent || control.getAttribute('aria-label') || '');
+                const context = this.normalizeText((control.closest('div, fieldset, section, article')?.textContent || '').slice(0, 300));
+                if (text.includes('search') && !context.includes('gender') && !context.includes('veteran') && !context.includes('disability')) continue;
+
+                seen.add(identity);
+                controls.push(control);
+            }
+
+            return controls.filter(control => {
+                const style = window.getComputedStyle(control);
+                if (style.display === 'none' || style.visibility === 'hidden') {
+                    return false;
+                }
+                return control.offsetParent !== null || control.getClientRects().length > 0;
+            });
+        },
+
+        sortElementsTopToBottom(elements) {
+            return [...elements].sort((left, right) => {
+                const leftRect = left.getBoundingClientRect();
+                const rightRect = right.getBoundingClientRect();
+                const topDelta = Math.abs(leftRect.top - rightRect.top);
+
+                if (topDelta > 6) {
+                    return leftRect.top - rightRect.top;
+                }
+
+                if (Math.abs(leftRect.left - rightRect.left) > 6) {
+                    return leftRect.left - rightRect.left;
+                }
+
+                const relation = left.compareDocumentPosition(right);
+                if (relation & Node.DOCUMENT_POSITION_FOLLOWING) {
+                    return -1;
+                }
+                if (relation & Node.DOCUMENT_POSITION_PRECEDING) {
+                    return 1;
+                }
+
+                return 0;
+            });
+        },
+
+        resolveCustomComboboxControl(element) {
+            if (!element || !element.isConnected) return null;
+
+            const root =
+                element.closest(`.${GREENHOUSE_SELECT_CLASSES.control}`) ||
+                element.closest('[role="combobox"]') ||
+                element.closest('button[aria-haspopup="listbox"]') ||
+                element.closest('[aria-haspopup="listbox"]');
+
+            if (!root || root.tagName === 'SELECT') {
+                return null;
+            }
+
+            return root;
+        },
+
+        getCustomComboboxContextRoot(control) {
+            const resolvedControl = this.resolveCustomComboboxControl(control) || control;
+            return this.findQuestionContainer(resolvedControl) ||
+                resolvedControl.closest('fieldset, section, article, [class*="question"], [class*="field"], [class*="form-group"], [class*="form-item"]') ||
+                resolvedControl.parentElement ||
+                resolvedControl;
+        },
+
+        isElementVisiblyRendered(element) {
+            if (!element) {
+                return false;
+            }
+
+            const style = window.getComputedStyle(element);
+            if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+                return false;
+            }
+
+            const rect = element.getBoundingClientRect();
+            return (rect.width > 0 && rect.height > 0) || element.getClientRects().length > 0;
+        },
+
+        isCustomComboboxUnanswered(control) {
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const normalizedSelection = this.normalizeText(this.getCustomComboboxSelectionText(root));
+            const text = normalizedSelection || this.normalizeText(root.textContent || root.value || root.getAttribute('aria-label') || '');
+            if (!text) return true;
+
+            const placeholderSignals = ['select', 'choose', 'please select', 'please choose', 'open', 'options'];
+            return placeholderSignals.some(signal => text === signal || text.startsWith(signal));
+        },
+
+        getCustomComboboxSelectionText(control) {
+            if (!control) return '';
+
+            const root = this.resolveCustomComboboxControl(control) || control;
+
+            const hiddenInput = root.querySelector('input[type="hidden"], input[name], input[id]');
+            if (hiddenInput?.value) {
+                return hiddenInput.value;
+            }
+
+            const visibleValue = root.querySelector('.select__single-value, [class*="single-value"], [class*="valueContainer"]');
+            if (visibleValue?.textContent?.trim()) {
+                return visibleValue.textContent.trim();
+            }
+
+            return root.textContent?.trim() || '';
+        },
+
+        identifyCustomChoiceFieldType(control) {
+            const resolvedControl = this.resolveCustomComboboxControl(control) || control;
+            const controlText = (this.getCustomComboboxSelectionText(resolvedControl) || resolvedControl.textContent || '').toLowerCase();
+            const ariaLabel = (resolvedControl.getAttribute('aria-label') || '').toLowerCase();
+            const labelledBy = FieldDetector.getAriaLabelledByText(resolvedControl).toLowerCase();
+            const root = this.getCustomComboboxContextRoot(resolvedControl);
+            const relatedInput = root.querySelector('input[type="hidden"], input[name], input[id]');
+            const inputName = (relatedInput?.name || '').toLowerCase();
+            const inputId = (relatedInput?.id || '').toLowerCase();
+            const contextText = (root.textContent || '').toLowerCase().slice(0, 350);
+            return this.inferStructuredChoiceFieldType(controlText, ariaLabel, labelledBy, inputName, inputId, contextText);
+        },
+
+        async getComboboxOptions(control) {
+            if (!control) return [];
+
+            const resolvedControl = this.resolveCustomComboboxControl(control) || control;
+
+            await this.openCustomCombobox(resolvedControl);
+
+            const options = await this.waitForVisibleElements(() => {
+                return this.findVisibleComboboxOptions(resolvedControl);
+            }, {
+                timeoutMs: 2000,
+                intervalMs: 150
+            });
+
+            return options.map(option => ({
+                text: (option.textContent || '').replace(/\s+/g, ' ').trim(),
+                element: option
+            })).filter(option => option.text && !this.isPlaceholderOption(option.text));
+        },
+
+        async openCustomCombobox(control) {
+            const root = this.resolveCustomComboboxControl(control) || control;
+
+            const indicator = root.querySelector(`.${GREENHOUSE_SELECT_CLASSES.indicator}`);
+            const input = root.querySelector(`input.${GREENHOUSE_SELECT_CLASSES.input}, .${GREENHOUSE_SELECT_CLASSES.input} input, input[type="text"]`);
+
+            if (root.getAttribute('aria-expanded') !== 'true' && control.getAttribute('aria-expanded') !== 'true') {
+                const targets = [control, root, indicator, input].filter(Boolean);
+
+                for (const target of targets) {
+                    if (root.getAttribute('aria-expanded') === 'true' || control.getAttribute('aria-expanded') === 'true') {
+                        break;
+                    }
+
+                    this.clickElement(target);
+                    target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+                    target.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+                    target.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+                    target.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+                    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                }
+            }
+
+            if (input) {
+                input.focus();
+                input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+                input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+            } else {
+                root.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+                root.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+            }
+        },
+
+        findVisibleComboboxOptions(control) {
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const listboxIds = [
+                root.getAttribute('aria-controls'),
+                root.getAttribute('aria-owns'),
+                root.querySelector('input[aria-controls]')?.getAttribute('aria-controls'),
+                root.querySelector('input[aria-owns]')?.getAttribute('aria-owns')
+            ].filter(Boolean);
+            const explicitListboxes = listboxIds.flatMap(listboxId => listboxId.split(/\s+/).map(id => document.getElementById(id)).filter(Boolean));
+            const visibleListboxes = Array.from(document.querySelectorAll(
+                `[role="listbox"], [data-reach-listbox-popover], [class*="listbox"], [class*="menu"], .${GREENHOUSE_SELECT_CLASSES.menu}`
+            ));
+            const listboxes = [...new Set([...explicitListboxes, ...visibleListboxes])].filter(listbox => {
+                return this.isElementVisiblyRendered(listbox);
+            });
+
+            const rootRect = root.getBoundingClientRect();
+            const scopedListboxes = listboxes
+                .map(listbox => {
+                    const rect = listbox.getBoundingClientRect();
+                    const horizontalDistance = Math.abs(rect.left - rootRect.left);
+                    const verticalDistance = rect.top >= rootRect.top
+                        ? rect.top - rootRect.top
+                        : rootRect.top - rect.bottom;
+                    const score = horizontalDistance + verticalDistance;
+                    const containsActiveDescendant = Boolean(root.getAttribute('aria-activedescendant')) &&
+                        listbox.querySelector(`#${CSS.escape(root.getAttribute('aria-activedescendant'))}`);
+                    const isExplicit = explicitListboxes.includes(listbox);
+
+                    return {
+                        listbox,
+                        score: isExplicit ? score - 1000 : containsActiveDescendant ? score - 500 : score
+                    };
+                })
+                .sort((left, right) => left.score - right.score)
+                .slice(0, 2)
+                .map(item => item.listbox);
+
+            const optionSelector = `[role="option"], li, button, [data-option], [data-value], .${GREENHOUSE_SELECT_CLASSES.option}`;
+            const options = [];
+            for (const listbox of scopedListboxes) {
+                for (const option of listbox.querySelectorAll(optionSelector)) {
+                    const text = (option.textContent || '').replace(/\s+/g, ' ').trim();
+                    if (!this.isElementVisiblyRendered(option)) continue;
+                    if (!text || text.length > 120) continue;
+                    options.push(option);
+                }
+            }
+
+            return options;
+        },
+
+        async fillAiChoiceFields() {
+            const aiSettings = this.settings?.aiAssist;
+            if (!aiSettings?.apiKey) {
+                return;
+            }
+
+            const candidates = this.collectAiChoiceCandidates();
+            if (candidates.length === 0) {
+                return;
+            }
+
+            console.log(`[JobAutofill] Found ${candidates.length} AI choice candidates`);
+
+            const limit = Math.max(1, Math.min(aiSettings.maxQuestionsPerRun || 3, candidates.length));
+            const jobPostingText = this.extractJobPostingText();
+            const pageTitle = document.title || '';
+
+            for (const candidate of candidates.slice(0, limit)) {
+                try {
+                    const response = await chrome.runtime.sendMessage({
+                        action: 'generateAiAnswer',
+                        payload: {
+                            question: candidate.question,
+                            fieldLabel: candidate.label,
+                            helperText: candidate.helperText,
+                            sectionContext: candidate.sectionContext,
+                            choiceOptions: candidate.options.map(option => option.text),
+                            fieldHtmlType: candidate.type,
+                            pageTitle,
+                            jobPostingText,
+                            userProfile: this.buildAiUserProfile()
+                        }
+                    });
+
+                    if (!response?.success || !response.answer) {
+                        continue;
+                    }
+
+                    const matchedOption = this.findBestAiChoiceMatch(candidate.options, response.answer);
+                    if (!matchedOption) {
+                        continue;
+                    }
+
+                    const applied =
+                        candidate.type === 'select'
+                            ? this.applySelectOption(candidate.element, matchedOption.element)
+                            : this.applyChoiceControl(matchedOption.element);
+
+                    if (applied) {
+                        this.filledFields.push({ type: 'aiChoiceField', element: matchedOption.element });
+                        this.highlightField(matchedOption.element, true);
+                    }
+                } catch (error) {
+                    console.warn('[JobAutofill] AI choice selection failed:', error);
+                }
+            }
+        },
+
+        collectAiChoiceCandidates() {
+            const candidates = [];
+            const seenKeys = new Set();
+
+            for (const candidate of this.collectAiSelectCandidates()) {
+                const key = `select:${this.normalizeText(candidate.question)}`;
+                if (!seenKeys.has(key)) {
+                    seenKeys.add(key);
+                    candidates.push(candidate);
+                }
+            }
+
+            for (const candidate of this.collectAiRadioCandidates()) {
+                const key = `radio:${this.normalizeText(candidate.question)}`;
+                if (!seenKeys.has(key)) {
+                    seenKeys.add(key);
+                    candidates.push(candidate);
+                }
+            }
+
+            for (const candidate of this.collectAiCheckboxCandidates()) {
+                const key = `checkbox:${this.normalizeText(candidate.question)}`;
+                if (!seenKeys.has(key)) {
+                    seenKeys.add(key);
+                    candidates.push(candidate);
+                }
+            }
+
+            return candidates;
+        },
+
+        collectAiSelectCandidates() {
+            const selects = Array.from(document.querySelectorAll('select'));
+            const candidates = [];
+
+            for (const select of selects) {
+                if (!this.isElementAllowed(select) || select.disabled) continue;
+                if (select.value && select.selectedIndex > 0) continue;
+
+                const context = this.getAiFieldContext(select);
+                if (!context.question || !this.looksLikeChoiceQuestion(context.question, context.sectionContext)) continue;
+                if (this.shouldSkipAiChoiceForProfile({ ...context, element: select, fieldType: FieldDetector.identifyFieldType(select) })) continue;
+
+                const options = Array.from(select.options)
+                    .filter(option => option.value && option.textContent && !this.isPlaceholderOption(option.textContent))
+                    .map(option => ({ text: option.textContent.trim(), element: option }));
+
+                if (options.length < 2 || options.length > 12) continue;
+
+                candidates.push({
+                    type: 'select',
+                    element: select,
+                    question: context.question,
+                    label: context.label,
+                    helperText: context.helperText,
+                    sectionContext: context.sectionContext,
+                    options
+                });
+            }
+
+            return candidates;
+        },
+
+        collectAiRadioCandidates() {
+            const groups = new Map();
+
+            for (const radio of document.querySelectorAll('input[type="radio"]')) {
+                const key = radio.name || this.normalizeText(FieldDetector.getQuestionText(radio)) || `radio-${groups.size}`;
+                if (!groups.has(key)) {
+                    groups.set(key, []);
+                }
+                groups.get(key).push(radio);
+            }
+
+            const candidates = [];
+            for (const radios of groups.values()) {
+                if (radios.some(radio => radio.checked)) continue;
+                if (radios.some(radio => !this.isElementAllowed(radio) || radio.disabled)) continue;
+
+                const context = this.getAiFieldContext(radios[0]);
+                if (!context.question || !this.looksLikeChoiceQuestion(context.question, context.sectionContext)) continue;
+                if (this.shouldSkipAiChoiceForProfile({ ...context, element: radios[0] })) continue;
+
+                const options = radios
+                    .map(radio => ({ text: FieldDetector.getChoiceLabelText(radio).trim(), element: radio }))
+                    .filter(option => option.text && !this.isPlaceholderOption(option.text));
+
+                if (options.length < 2 || options.length > 8) continue;
+
+                candidates.push({
+                    type: 'radio',
+                    element: radios[0],
+                    question: context.question,
+                    label: context.label,
+                    helperText: context.helperText,
+                    sectionContext: context.sectionContext,
+                    options
+                });
+            }
+
+            return candidates;
+        },
+
+        collectAiCheckboxCandidates() {
+            const groups = new Map();
+
+            for (const checkbox of document.querySelectorAll('input[type="checkbox"]')) {
+                const questionText = this.normalizeText(FieldDetector.getQuestionText(checkbox));
+                const key = checkbox.name || questionText || `checkbox-${groups.size}`;
+                if (!groups.has(key)) {
+                    groups.set(key, []);
+                }
+                groups.get(key).push(checkbox);
+            }
+
+            const candidates = [];
+            for (const checkboxes of groups.values()) {
+                if (checkboxes.some(checkbox => checkbox.checked)) continue;
+                if (checkboxes.some(checkbox => !this.isElementAllowed(checkbox) || checkbox.disabled)) continue;
+
+                const context = this.getAiFieldContext(checkboxes[0]);
+                const normalizedQuestion = this.normalizeText(context.question || '');
+                if (!context.question || !this.looksLikeChoiceQuestion(context.question, context.sectionContext)) continue;
+                if (this.shouldSkipAiChoiceForProfile({ ...context, element: checkboxes[0] })) continue;
+                if (normalizedQuestion.includes('terms') || normalizedQuestion.includes('privacy') || normalizedQuestion.includes('consent')) continue;
+
+                const options = checkboxes
+                    .map(checkbox => ({ text: FieldDetector.getChoiceLabelText(checkbox).trim(), element: checkbox }))
+                    .filter(option => option.text && !this.isPlaceholderOption(option.text));
+
+                if (options.length < 2 || options.length > 8) continue;
+
+                candidates.push({
+                    type: 'checkbox',
+                    element: checkboxes[0],
+                    question: context.question,
+                    label: context.label,
+                    helperText: context.helperText,
+                    sectionContext: context.sectionContext,
+                    options
+                });
+            }
+
+            return candidates;
+        },
+
+        looksLikeChoiceQuestion(question, sectionContext) {
+            const normalizedQuestion = this.normalizeText(question || '');
+            const normalizedContext = this.normalizeText(sectionContext || '');
+            const negativeSignals = ['resume', 'upload', 'drag and drop', 'privacy', 'terms', 'subscribe', 'job alert'];
+            if (negativeSignals.some(signal => normalizedQuestion.includes(signal) || normalizedContext.includes(signal))) {
+                return false;
+            }
+
+            return normalizedQuestion.length >= 6;
+        },
+
+        isPlaceholderOption(text) {
+            const normalizedText = this.normalizeText(text);
+            return ['select', 'choose', 'please select', 'please choose'].some(prefix => normalizedText === prefix || normalizedText.startsWith(prefix));
+        },
+
+        findBestAiChoiceMatch(options, answer) {
+            const normalizedAnswer = this.normalizeText(answer);
+            let bestMatch = null;
+            let bestScore = -1;
+
+            for (const option of options) {
+                const normalizedText = this.normalizeText(option.text);
+                let score = 0;
+
+                if (normalizedText === normalizedAnswer) {
+                    score += 20;
+                }
+                if (normalizedAnswer.includes(normalizedText) || normalizedText.includes(normalizedAnswer)) {
+                    score += 12;
+                }
+
+                const answerTokens = new Set(normalizedAnswer.split(' ').filter(Boolean));
+                const optionTokens = normalizedText.split(' ').filter(Boolean);
+                for (const token of optionTokens) {
+                    if (answerTokens.has(token)) {
+                        score += 2;
+                    }
+                }
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = option;
+                }
+            }
+
+            return bestScore > 0 ? bestMatch : null;
+        },
+
+        applySelectOption(select, option) {
+            if (!select || !option) return false;
+            select.value = option.value;
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+            return select.value === option.value;
+        },
+
+        applyChoiceControl(control) {
+            if (!control) return false;
+            if (control instanceof HTMLInputElement && (control.type === 'radio' || control.type === 'checkbox')) {
+                return this.selectRadio(control);
+            }
+
+            control.focus?.();
+            control.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, cancelable: true }));
+            control.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true }));
+            control.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
+            control.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, cancelable: true }));
+            control.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
+            control.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+
+            const optionRoot = control.closest('[role="option"], li, button, [data-option], [data-value], .select__option');
+            const selected = optionRoot?.getAttribute('aria-selected');
+            return selected !== 'false';
         },
 
         findAiQuestionCandidates(detectedFields) {
@@ -765,12 +1698,12 @@
                     continue;
                 }
 
-                const prompt = this.getAiQuestionPrompt(input);
-                if (!prompt) {
+                const context = this.getAiFieldContext(input);
+                if (!context.question) {
                     continue;
                 }
 
-                const dedupeKey = this.normalizeText(prompt);
+                const dedupeKey = this.normalizeText(`${context.question} ${context.helperText || ''}`);
                 if (seenQuestions.has(dedupeKey)) {
                     continue;
                 }
@@ -778,8 +1711,10 @@
                 seenQuestions.add(dedupeKey);
                 candidates.push({
                     input,
-                    question: prompt,
-                    label: FieldDetector.getLabelText(input) || input.getAttribute('aria-label') || ''
+                    question: context.question,
+                    label: context.label,
+                    helperText: context.helperText,
+                    sectionContext: context.sectionContext
                 });
             }
 
@@ -810,6 +1745,14 @@
                 return false;
             }
 
+            const likelyNonQuestionPatterns = [
+                'search', 'filter', 'coupon', 'promo code', 'referral code', 'employee referral',
+                'portfolio url', 'personal website', 'current company', 'school', 'university'
+            ];
+            if (likelyNonQuestionPatterns.some(pattern => allText.includes(pattern))) {
+                return false;
+            }
+
             const aiPromptPatterns = [
                 'why', 'what', 'how', 'describe', 'tell us', 'tell me', 'superpower', 'kryptonite',
                 'cover letter', 'summary', 'motivation', 'interested', 'excited', 'fit for this role',
@@ -819,32 +1762,141 @@
             return input instanceof HTMLTextAreaElement || aiPromptPatterns.some(pattern => allText.includes(pattern));
         },
 
-        getAiQuestionPrompt(input) {
-            const promptParts = [];
+        getAiFieldContext(input) {
             const labelText = FieldDetector.getLabelText(input);
             const ariaText = input.getAttribute('aria-label') || '';
             const questionText = FieldDetector.getQuestionText(input);
             const placeholder = input.placeholder || '';
-            const sectionText = input.closest('div, fieldset, section, article')?.textContent?.replace(/\s+/g, ' ').trim() || '';
+            const ariaDescriptionText = this.getAriaDescribedByText(input);
+            const wrapper = this.findQuestionContainer(input);
+            const sectionText = (wrapper?.textContent || '').replace(/\s+/g, ' ').trim();
+            const visibleQuestion = this.extractQuestionSentence(sectionText);
+            const helperText = this.extractHelperText(input, wrapper, [labelText, ariaText, questionText, visibleQuestion, placeholder]);
 
-            if (labelText) promptParts.push(labelText);
-            if (ariaText && ariaText !== labelText) promptParts.push(ariaText);
-            if (questionText && !promptParts.includes(questionText)) promptParts.push(questionText);
-            if (placeholder && !promptParts.includes(placeholder)) promptParts.push(`Placeholder: ${placeholder}`);
+            const questionCandidates = [
+                labelText,
+                ariaText,
+                questionText,
+                ariaDescriptionText,
+                visibleQuestion,
+                placeholder
+            ].map(text => (text || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
 
-            const prompt = promptParts.join(' ').trim();
-            if (prompt.length >= 12) {
-                return prompt;
-            }
+            const question = questionCandidates.find(text => this.looksLikeQuestionPrompt(text)) || questionCandidates[0] || '';
 
-            if (sectionText.includes('?')) {
-                const questionMatch = sectionText.match(/([^?.!]*\?)/);
-                if (questionMatch?.[1]) {
-                    return questionMatch[1].trim();
+            return {
+                label: labelText || ariaText || questionText || '',
+                question,
+                helperText,
+                sectionContext: sectionText.slice(0, 350)
+            };
+        },
+
+        findQuestionContainer(input) {
+            const selectors = [
+                '[data-testid*="question"]',
+                '[data-qa*="question"]',
+                '[class*="application"]',
+                '[class*="question"]',
+                '[class*="field"]',
+                '[class*="form-item"]',
+                '[class*="form-group"]',
+                'fieldset',
+                'section'
+            ];
+
+            for (const selector of selectors) {
+                const container = input.closest(selector);
+                if (container && container.textContent && container.textContent.trim().length > 0) {
+                    return container;
                 }
             }
 
-            return sectionText.slice(0, 220).trim();
+            return input.parentElement;
+        },
+
+        extractQuestionSentence(text) {
+            const normalizedText = (text || '').replace(/\s+/g, ' ').trim();
+            if (!normalizedText) {
+                return '';
+            }
+
+            const questionMatch = normalizedText.match(/([^.!?]*\?)/);
+            if (questionMatch?.[1]) {
+                return questionMatch[1].trim();
+            }
+
+            const sentenceCandidates = normalizedText
+                .split(/(?<=[.!])\s+/)
+                .map(sentence => sentence.trim())
+                .filter(Boolean);
+
+            return sentenceCandidates.find(sentence => this.looksLikeQuestionPrompt(sentence)) || '';
+        },
+
+        extractHelperText(input, container, excludedTexts) {
+            const excluded = new Set((excludedTexts || []).map(text => (text || '').replace(/\s+/g, ' ').trim()).filter(Boolean));
+            const helperSelectors = [
+                '[class*="hint"]',
+                '[class*="help"]',
+                '[class*="description"]',
+                '[class*="subtitle"]',
+                '[aria-live]',
+                'small',
+                'p'
+            ];
+
+            const helperTexts = [];
+            if (container) {
+                for (const selector of helperSelectors) {
+                    for (const node of container.querySelectorAll(selector)) {
+                        const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+                        if (text && !excluded.has(text) && text.length <= 220) {
+                            helperTexts.push(text);
+                        }
+                    }
+                }
+            }
+
+            const describedByText = this.getAriaDescribedByText(input);
+            if (describedByText && !excluded.has(describedByText)) {
+                helperTexts.unshift(describedByText);
+            }
+
+            return helperTexts.slice(0, 2).join(' ');
+        },
+
+        getAriaDescribedByText(input) {
+            const describedBy = input.getAttribute('aria-describedby');
+            if (!describedBy) return '';
+
+            return describedBy.split(/\s+/)
+                .map(id => document.getElementById(id)?.textContent?.trim() || '')
+                .filter(Boolean)
+                .join(' ');
+        },
+
+        looksLikeQuestionPrompt(text) {
+            const normalizedText = this.normalizeText(text);
+            if (!normalizedText || normalizedText.length < 8) {
+                return false;
+            }
+
+            const positiveSignals = [
+                'why', 'what', 'how', 'tell us', 'tell me', 'describe', 'share', 'explain',
+                'interested', 'motivation', 'superpower', 'kryptonite', 'background', 'experience',
+                'fit for this role', 'accomplishment', 'achievement', 'challenge', 'cover letter'
+            ];
+            const negativeSignals = [
+                'optional', 'required', 'max', 'characters', 'upload', 'drag and drop',
+                'resume', 'cv', 'search', 'select', 'choose', 'click', 'continue'
+            ];
+
+            if (negativeSignals.some(signal => normalizedText.includes(signal)) && !normalizedText.includes('?')) {
+                return false;
+            }
+
+            return text.includes('?') || positiveSignals.some(signal => normalizedText.includes(this.normalizeText(signal)));
         },
 
         extractJobPostingText() {
@@ -913,6 +1965,10 @@
             return this.userData.city;
         },
 
+        getDefaultPhoneCountryCode() {
+            return '+1';
+        },
+
         /**
          * Find and fill text inputs that ask for combined city+state
          */
@@ -955,7 +2011,7 @@
         /**
          * Fill an input with a value, dispatching proper events
          */
-        fillInput(input, value) {
+        fillInput(input, value, options = {}) {
             if (!input || !value) return false;
 
             if (!this.isElementAllowed(input)) return false;
@@ -966,12 +2022,16 @@
             if (input.value && input.value.trim()) return false;
 
             try {
-                // Focus the input
-                input.focus();
+                if (options.focus === true) {
+                    input.focus();
+                }
 
                 for (let attempt = 0; attempt < 2; attempt += 1) {
                     this.setElementValue(input, value);
-                    this.dispatchValueEvents(input);
+                    this.dispatchValueEvents(input, {
+                        emitFocus: options.emitFocus === true,
+                        emitBlur: options.emitBlur !== false
+                    });
 
                     if (this.normalizeText(input.value) === this.normalizeText(value)) {
                         return true;
@@ -1001,8 +2061,10 @@
             element.value = value;
         },
 
-        dispatchValueEvents(element) {
-            element.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+        dispatchValueEvents(element, options = {}) {
+            if (options.emitFocus === true) {
+                element.dispatchEvent(new FocusEvent('focus', { bubbles: true }));
+            }
             element.dispatchEvent(new InputEvent('beforeinput', {
                 bubbles: true,
                 cancelable: true,
@@ -1011,7 +2073,9 @@
             }));
             element.dispatchEvent(new Event('input', { bubbles: true }));
             element.dispatchEvent(new Event('change', { bubbles: true }));
-            element.dispatchEvent(new Event('blur', { bubbles: true }));
+            if (options.emitBlur !== false) {
+                element.dispatchEvent(new Event('blur', { bubbles: true }));
+            }
         },
 
         /**
@@ -1388,35 +2452,60 @@
                 }
 
                 // Dispatch events
-                this.dispatchValueEvents(input);
+                this.dispatchValueEvents(input, { emitFocus: false, emitBlur: false });
                 input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'a' }));
                 input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'a' }));
 
-                // Look for autocomplete suggestions - very broad selector
-                const findSuggestions = () => {
-                    const candidates = document.querySelectorAll(
-                        '[role="listbox"] *, [role="option"], ' +
-                        '[class*="autocomplete"] *, [class*="suggestion"], ' +
-                        '[class*="dropdown"]:not(select) *, [class*="menu"] li, ' +
-                        '[class*="list"] [class*="item"], [class*="result"], ' +
-                        '[class*="option"]:not(option), [class*="combobox"] *, ' +
-                        '[data-option], [data-value], [class*="typeahead"] *, ' +
-                        'ul:not([role="menubar"]) li, [class*="popover"] li, ' +
-                        '[class*="popup"] li, [class*="overlay"] li'
-                    );
+                const normalizedLocation = this.normalizeText(location);
 
-                    return Array.from(candidates).filter(el => {
+                // Look for autocomplete suggestions near the input first.
+                const findSuggestions = () => {
+                    const containerCandidates = [
+                        input.closest('[role="combobox"]'),
+                        input.closest('[class*="autocomplete"]'),
+                        input.closest('[class*="typeahead"]'),
+                        input.parentElement,
+                        document.body
+                    ].filter(Boolean);
+
+                    const selector = [
+                        '[role="listbox"] [role="option"]',
+                        '[role="option"]',
+                        '[class*="autocomplete"] [role="option"]',
+                        '[class*="autocomplete"] li',
+                        '[class*="typeahead"] li',
+                        '[class*="suggestion"]',
+                        '[class*="combobox"] [data-option]',
+                        '[class*="combobox"] [data-value]'
+                    ].join(', ');
+
+                    const seen = new Set();
+                    const candidates = [];
+                    for (const container of containerCandidates) {
+                        for (const candidate of container.querySelectorAll(selector)) {
+                            if (!seen.has(candidate)) {
+                                seen.add(candidate);
+                                candidates.push(candidate);
+                            }
+                        }
+                    }
+
+                    return candidates.filter(el => {
                         const style = window.getComputedStyle(el);
                         const isVisible = style.display !== 'none' &&
                             style.visibility !== 'hidden' &&
                             style.opacity !== '0' &&
                             el.offsetParent !== null;
-                        const hasText = el.textContent?.trim().length > 0;
-                        const looksLikeLocation = el.textContent?.includes(',') ||
-                            el.textContent?.toLowerCase().includes('city') ||
-                            el.textContent?.toLowerCase().includes('state') ||
-                            el.textContent?.toLowerCase().includes('united');
-                        return isVisible && hasText && looksLikeLocation;
+                        const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
+                        const normalizedText = this.normalizeText(text);
+                        const hasText = text.length > 0;
+                        const looksReasonableLength = text.length >= 3 && text.length <= 80;
+                        const looksLikeLocation =
+                            normalizedText.includes(normalizedLocation) ||
+                            (normalizedText.includes(this.normalizeText(this.userData.city || '')) &&
+                                normalizedText.includes(this.normalizeText(this.userData.state || '')));
+
+                        return isVisible && hasText && looksReasonableLength && looksLikeLocation;
                     });
                 };
 
@@ -1437,7 +2526,7 @@
                         console.log(`[JobAutofill] Selected location: ${bestMatch.textContent?.trim()}`);
                     }
                 } else {
-                    // No suggestions, just dispatch final events
+                    // No valid suggestions, keep the typed value.
                     input.dispatchEvent(new Event('change', { bubbles: true }));
                     input.dispatchEvent(new Event('blur', { bubbles: true }));
                     this.filledFields.push({ type: 'location', element: input });
@@ -1505,9 +2594,13 @@
                     score += 2;
                 }
 
-                // Penalize very long suggestions
-                if (score > 0 && text.length > 100) {
-                    score -= 2;
+                // Penalize noisy non-location suggestions.
+                if (text.length > 80) {
+                    score -= 8;
+                }
+
+                if (!text.includes(',') && !text.includes(userCity)) {
+                    score -= 4;
                 }
 
                 if (score > bestScore) {
@@ -1516,10 +2609,9 @@
                 }
             }
 
-            // If no good match found, return first suggestion as fallback
-            if (!bestMatch && suggestions.length > 0) {
-                console.log('[JobAutofill] No exact match, using first suggestion');
-                bestMatch = suggestions[0];
+            if (bestScore <= 0) {
+                console.log('[JobAutofill] No reliable location suggestion found, keeping typed value');
+                return null;
             }
 
             return bestMatch;
@@ -1547,24 +2639,7 @@
          * Fill select dropdown fields
          */
         fillSelectFields(detectedFields) {
-            const selectMappings = {
-                gender: { value: this.userData.gender, patterns: FieldDetector.patterns.gender?.options },
-                transgender: { value: this.userData.transgender, patterns: FieldDetector.patterns.transgender?.options },
-                sexualOrientation: { value: this.userData.sexualOrientation, patterns: FieldDetector.patterns.sexualOrientation?.options },
-                pronouns: { value: this.userData.pronouns, patterns: FieldDetector.patterns.pronouns?.options },
-                hispanicLatino: { value: this.userData.hispanicLatino || 'no', patterns: FieldDetector.patterns.hispanicLatino?.options },
-                race: { value: this.userData.race, patterns: FieldDetector.patterns.race?.options },
-                veteran: { value: this.userData.veteran, patterns: FieldDetector.patterns.veteran?.options },
-                disability: { value: this.userData.disability, patterns: FieldDetector.patterns.disability?.options },
-                workAuth: { value: this.userData.workAuth, patterns: FieldDetector.patterns.workAuth?.options },
-                sponsorship: { value: this.userData.sponsorship, patterns: FieldDetector.patterns.sponsorship?.options },
-                onsiteComfort: { value: this.userData.onsiteComfort, patterns: FieldDetector.patterns.onsiteComfort?.options },
-                relocationWillingness: { value: this.userData.relocationWillingness, patterns: FieldDetector.patterns.relocationWillingness?.options },
-                internshipStatus: { value: this.userData.internshipStatus, patterns: FieldDetector.patterns.internshipStatus?.options },
-                over18: { value: this.userData.over18, patterns: FieldDetector.patterns.over18?.options },
-                formerEmployee: { value: this.userData.formerEmployee, patterns: FieldDetector.patterns.formerEmployee?.options },
-                startAvailability: { value: this.userData.startAvailability, patterns: FieldDetector.patterns.startAvailability?.options }
-            };
+            const selectMappings = this.getStructuredChoiceFieldMappings();
 
             for (const [fieldType, config] of Object.entries(selectMappings)) {
                 if (!config.value || !detectedFields[fieldType]) continue;
@@ -1574,7 +2649,15 @@
 
                     if (!this.isElementAllowed(select)) continue;
 
-                    const option = FieldDetector.findMatchingOption(select, config.value, config.patterns || {});
+                    const option = this.findProfileChoiceOption(
+                        Array.from(select.options).map(optionElement => ({
+                            text: optionElement.textContent.trim(),
+                            value: optionElement.value,
+                            element: optionElement
+                        })),
+                        config.value,
+                        config.patterns || {}
+                    )?.element;
                     if (option && !select.value) {
                         select.value = option.value;
                         select.dispatchEvent(new Event('change', { bubbles: true }));
