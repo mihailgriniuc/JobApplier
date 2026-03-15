@@ -23,6 +23,10 @@ const PARSED_RESUME_SECTION_KEYS = [
     'certifications',
     'projects'
 ];
+const MAX_RESUME_OCR_TEXT_LENGTH = 120000;
+const MAX_RESUME_STRUCTURE_DEPTH = 6;
+const MAX_RESUME_STRUCTURE_ARRAY_ITEMS = 100;
+const MAX_RESUME_STRUCTURE_OBJECT_KEYS = 100;
 
 let localAiConfigCache = null;
 
@@ -104,6 +108,97 @@ function hasParsedResumeSections(parsedResume) {
     });
 }
 
+function sanitizeStructuredResumeValue(value, depth = 0) {
+    if (depth > MAX_RESUME_STRUCTURE_DEPTH) {
+        return null;
+    }
+
+    if (typeof value === 'string') {
+        return value.trim().slice(0, 4000);
+    }
+
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+    }
+
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        const sanitizedItems = value
+            .map(item => sanitizeStructuredResumeValue(item, depth + 1))
+            .filter(item => item !== null && item !== '');
+
+        return sanitizedItems.slice(0, MAX_RESUME_STRUCTURE_ARRAY_ITEMS);
+    }
+
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    const entries = Object.entries(value)
+        .slice(0, MAX_RESUME_STRUCTURE_OBJECT_KEYS)
+        .map(([key, entryValue]) => {
+            const normalizedKey = typeof key === 'string' ? key.trim() : '';
+            if (!normalizedKey) {
+                return null;
+            }
+
+            const sanitizedValue = sanitizeStructuredResumeValue(entryValue, depth + 1);
+            if (sanitizedValue === null || sanitizedValue === '') {
+                return null;
+            }
+
+            return [normalizedKey, sanitizedValue];
+        })
+        .filter(Boolean);
+
+    if (entries.length === 0) {
+        return null;
+    }
+
+    return Object.fromEntries(entries);
+}
+
+function hasStructuredResumeValue(value, depth = 0) {
+    if (depth > MAX_RESUME_STRUCTURE_DEPTH || value === null || value === undefined) {
+        return false;
+    }
+
+    if (typeof value === 'string') {
+        return value.trim().length > 0;
+    }
+
+    if (typeof value === 'number') {
+        return Number.isFinite(value);
+    }
+
+    if (typeof value === 'boolean') {
+        return true;
+    }
+
+    if (Array.isArray(value)) {
+        return value.some(item => hasStructuredResumeValue(item, depth + 1));
+    }
+
+    if (typeof value === 'object') {
+        return Object.values(value).some(item => hasStructuredResumeValue(item, depth + 1));
+    }
+
+    return false;
+}
+
+function hasParsedResumeContent(parsedResume) {
+    if (!parsedResume || typeof parsedResume !== 'object') {
+        return false;
+    }
+
+    return hasParsedResumeSections(parsedResume)
+        || hasStructuredResumeValue(parsedResume.structuredData)
+        || (typeof parsedResume.ocrText === 'string' && parsedResume.ocrText.trim().length > 0);
+}
+
 function createDefaultParsedResumeData(resumeData) {
     return normalizeParsedResumeData({
         isParsed: false,
@@ -112,6 +207,9 @@ function createDefaultParsedResumeData(resumeData) {
         sourceUploadedAt: resumeData?.uploadedAt || null,
         parsedAt: null,
         updatedAt: new Date().toISOString(),
+        ocrText: '',
+        ocrPageCount: 0,
+        structuredData: null,
         resumeSummary: '',
         skills: [],
         experienceHighlights: [],
@@ -130,6 +228,13 @@ function normalizeParsedResumeData(parsedResume) {
         sourceUploadedAt: getIsoTimestamp(source.sourceUploadedAt, null),
         parsedAt: getIsoTimestamp(source.parsedAt, null),
         updatedAt: getIsoTimestamp(source.updatedAt, new Date().toISOString()),
+        ocrText: typeof source.ocrText === 'string'
+            ? source.ocrText.trim().slice(0, MAX_RESUME_OCR_TEXT_LENGTH)
+            : '',
+        ocrPageCount: Number.isFinite(Number(source.ocrPageCount))
+            ? Math.max(0, Math.min(Math.round(Number(source.ocrPageCount)), 500))
+            : 0,
+        structuredData: sanitizeStructuredResumeValue(source.structuredData),
         resumeSummary: typeof source.resumeSummary === 'string' ? source.resumeSummary.trim() : '',
         skills: sanitizeStringList(source.skills, 40),
         experienceHighlights: sanitizeStringList(source.experienceHighlights, 20),
@@ -138,7 +243,7 @@ function normalizeParsedResumeData(parsedResume) {
         projects: sanitizeStringList(source.projects, 20)
     };
 
-    normalized.isParsed = normalized.isParsed && hasParsedResumeSections(normalized);
+    normalized.isParsed = normalized.isParsed && hasParsedResumeContent(normalized);
     if (!normalized.isParsed) {
         normalized.parsedAt = null;
     }

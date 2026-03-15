@@ -57,10 +57,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     const importDropZone = document.getElementById('importDropZone');
     const importInput = document.getElementById('importInput');
     const importResult = document.getElementById('importResult');
+    const parseResumeBtn = document.getElementById('parseResumeBtn');
     const replaceResumeBtn = document.getElementById('replaceResumeBtn');
     const removeResumeBtn = document.getElementById('removeResumeBtn');
     const resumeInput = document.getElementById('resumeInput');
     const resumeResult = document.getElementById('resumeResult');
+    const parsedResumePreviewMeta = document.getElementById('parsedResumePreviewMeta');
+    const parsedResumePreviewSections = document.getElementById('parsedResumePreviewSections');
+    const parsedResumeJsonPreview = document.getElementById('parsedResumeJsonPreview');
 
     // Clear data
     const clearDataBtn = document.getElementById('clearDataBtn');
@@ -293,6 +297,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
                 removeResumeBtn.disabled = !resume;
+                parseResumeBtn.disabled = !resume;
 
                 await renderParsedResumeStatus(resume);
     }
@@ -333,10 +338,25 @@ document.addEventListener('DOMContentLoaded', async () => {
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
+    function escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     function getParsedResumeSections(parsedResumeData) {
         if (!parsedResumeData || typeof parsedResumeData !== 'object') {
             return null;
         }
+
+        const structuredData = parsedResumeData.structuredData
+            && typeof parsedResumeData.structuredData === 'object'
+            && !Array.isArray(parsedResumeData.structuredData)
+            ? parsedResumeData.structuredData
+            : null;
 
         const sections = {
             resumeSummary: typeof parsedResumeData.resumeSummary === 'string' ? parsedResumeData.resumeSummary.trim() : '',
@@ -344,17 +364,99 @@ document.addEventListener('DOMContentLoaded', async () => {
             experienceHighlights: Array.isArray(parsedResumeData.experienceHighlights) ? parsedResumeData.experienceHighlights.filter(Boolean) : [],
             educationHighlights: Array.isArray(parsedResumeData.educationHighlights) ? parsedResumeData.educationHighlights.filter(Boolean) : [],
             certifications: Array.isArray(parsedResumeData.certifications) ? parsedResumeData.certifications.filter(Boolean) : [],
-            projects: Array.isArray(parsedResumeData.projects) ? parsedResumeData.projects.filter(Boolean) : []
+            projects: Array.isArray(parsedResumeData.projects) ? parsedResumeData.projects.filter(Boolean) : [],
+            structuredData
         };
 
-        return Object.values(sections).some(value => Array.isArray(value) ? value.length > 0 : Boolean(value))
+        return Object.values(sections).some(value => {
+            if (Array.isArray(value)) {
+                return value.length > 0;
+            }
+
+            if (value && typeof value === 'object') {
+                return Object.keys(value).length > 0;
+            }
+
+            return Boolean(value);
+        })
             ? sections
             : null;
+    }
+
+    function renderParsedResumePreview(parsedResumeData, resume) {
+        const sections = getParsedResumeSections(parsedResumeData);
+
+        if (!resume) {
+            parsedResumePreviewMeta.textContent = 'No structured data available yet.';
+            parsedResumePreviewSections.innerHTML = '<p class="help-text">Upload a resume to preview extracted sections and JSON.</p>';
+            parsedResumeJsonPreview.textContent = 'No structured resume JSON available.';
+            return;
+        }
+
+        if (!sections || parsedResumeData?.isParsed !== true) {
+            parsedResumePreviewMeta.textContent = 'Resume uploaded, but structured extraction is not ready.';
+            parsedResumePreviewSections.innerHTML = '<p class="help-text">Use Re-Extract Resume to inspect what the AI will use.</p>';
+            parsedResumeJsonPreview.textContent = 'No structured resume JSON available.';
+            return;
+        }
+
+        const cards = [];
+
+        if (sections.resumeSummary) {
+            cards.push([
+                '<article class="parsed-resume-section">',
+                '<h4>Summary</h4>',
+                `<p>${escapeHtml(sections.resumeSummary)}</p>`,
+                '</article>'
+            ].join(''));
+        }
+
+        [
+            ['Skills', sections.skills],
+            ['Experience', sections.experienceHighlights],
+            ['Education', sections.educationHighlights],
+            ['Certifications', sections.certifications],
+            ['Projects', sections.projects]
+        ].forEach(([title, items]) => {
+            if (!Array.isArray(items) || items.length === 0) {
+                return;
+            }
+
+            cards.push([
+                '<article class="parsed-resume-section">',
+                `<h4>${escapeHtml(title)}</h4>`,
+                `<ul>${items.slice(0, 6).map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`,
+                '</article>'
+            ].join(''));
+        });
+
+        parsedResumePreviewSections.innerHTML = cards.length > 0
+            ? cards.join('')
+            : '<p class="help-text">Structured resume JSON exists, but there are no compact preview sections to show.</p>';
+
+        const parsedAtLabel = parsedResumeData?.parsedAt
+            ? new Date(parsedResumeData.parsedAt).toLocaleString()
+            : 'unknown time';
+        const pageCountLabel = Number(parsedResumeData?.ocrPageCount) > 0
+            ? `${parsedResumeData.ocrPageCount} page${parsedResumeData.ocrPageCount === 1 ? '' : 's'}`
+            : 'page count unavailable';
+        parsedResumePreviewMeta.textContent = `Parsed with ${parsedResumeData.parser || 'AI'} on ${parsedAtLabel} from ${pageCountLabel}.`;
+
+        const previewPayload = sections.structuredData || {
+            resumeSummary: sections.resumeSummary,
+            skills: sections.skills,
+            experienceHighlights: sections.experienceHighlights,
+            educationHighlights: sections.educationHighlights,
+            certifications: sections.certifications,
+            projects: sections.projects
+        };
+        parsedResumeJsonPreview.textContent = JSON.stringify(previewPayload, null, 2);
     }
 
     async function renderParsedResumeStatus(resume) {
         const parsedResumeData = await Storage.getParsedResumeData();
         const sections = getParsedResumeSections(parsedResumeData);
+        renderParsedResumePreview(parsedResumeData, resume);
 
         if (!resume) {
             parsedResumeStatus.textContent = 'No resume uploaded';
@@ -375,10 +477,47 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (sections.educationHighlights.length) sectionDetails.push(`${sections.educationHighlights.length} education highlights`);
         if (sections.certifications.length) sectionDetails.push(`${sections.certifications.length} certifications`);
         if (sections.projects.length) sectionDetails.push(`${sections.projects.length} projects`);
+        if (sections.structuredData) sectionDetails.push('full structured JSON');
 
         parsedResumeStatus.textContent = 'Structured resume context ready';
         parsedResumeDetails.textContent = `Available sections: ${sectionDetails.join(', ')}.`;
     }
+
+    async function parseStoredResume(force = true) {
+        const response = await chrome.runtime.sendMessage({
+            action: 'parseStoredResume',
+            force
+        });
+
+        if (!response?.success) {
+            throw new Error(response?.error || 'Failed to extract structured resume data.');
+        }
+
+        return response.parsedResume || null;
+    }
+
+    parseResumeBtn.addEventListener('click', async () => {
+        const resume = await Storage.getResume();
+        if (!resume) {
+            showResumeResult(false, 'Upload a resume before running extraction.');
+            return;
+        }
+
+        const previousLabel = parseResumeBtn.textContent;
+        parseResumeBtn.disabled = true;
+        parseResumeBtn.textContent = 'Extracting...';
+
+        try {
+            await parseStoredResume(true);
+            await loadData();
+            showResumeResult(true, 'Re-extracted structured resume JSON. Review the preview below.');
+        } catch (error) {
+            showResumeResult(false, `Failed to extract structured resume data: ${error.message}`);
+        } finally {
+            parseResumeBtn.disabled = false;
+            parseResumeBtn.textContent = previousLabel;
+        }
+    });
 
     // Edit modal
     editPersonalBtn.addEventListener('click', async () => {
@@ -531,8 +670,21 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         try {
             await Storage.saveResume(file);
+            let parseWarning = '';
+
+            try {
+                await parseStoredResume(true);
+            } catch (error) {
+                parseWarning = error.message;
+            }
+
             await loadData();
-            showResumeResult(true, `Saved ${file.name} as the active resume.`);
+            showResumeResult(
+                true,
+                parseWarning
+                    ? `Saved ${file.name}, but structured extraction failed: ${parseWarning}`
+                    : `Saved ${file.name} and extracted structured resume JSON for AI answers.`
+            );
         } catch (error) {
             showResumeResult(false, `Failed to save resume: ${error.message}`);
         } finally {

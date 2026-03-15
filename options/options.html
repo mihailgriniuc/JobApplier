@@ -150,12 +150,23 @@
                     <div class="section-header">
                         <h2>Resume</h2>
                         <div class="resume-actions">
+                            <button id="parseResumeBtn" class="btn btn-secondary btn-sm" type="button">Re-Extract Resume</button>
                             <button id="replaceResumeBtn" class="btn btn-secondary btn-sm" type="button">Replace Resume</button>
                             <button id="removeResumeBtn" class="btn btn-secondary btn-sm" type="button">Remove Resume</button>
                         </div>
                     </div>
                     <div id="resumeDisplay" class="resume-display">
                         <p class="no-data">No resume uploaded</p>
+                    </div>
+                    <div class="resume-preview-card">
+                        <div class="resume-preview-header">
+                            <span class="data-label">Extracted Resume Preview</span>
+                            <span class="resume-preview-meta" id="parsedResumePreviewMeta">No structured data available yet.</span>
+                        </div>
+                        <div id="parsedResumePreviewSections" class="parsed-resume-sections">
+                            <p class="help-text">Upload or re-extract a resume to preview what the AI can use.</p>
+                        </div>
+                        <pre id="parsedResumeJsonPreview" class="parsed-resume-json">No structured resume JSON available.</pre>
                     </div>
                     <input type="file" id="resumeInput" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
                     <div id="resumeResult" class="import-result hidden"></div>
@@ -217,7 +228,7 @@
                 <div class="section-card">
                     <h2>AI Assistance</h2>
 
-                    <p class="help-text">AI answers are always active for open-ended text questions. Configure the model, response length, and resume context below.</p>
+                    <p class="help-text">AI can draft open-ended text answers and select the best option for choice fields using your saved profile, job context, and parsed resume data.</p>
 
                     <div class="setting-item">
                         <div class="setting-info">

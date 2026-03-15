@@ -19,13 +19,31 @@ const INJECTION_RETRY_COUNT = 8;
 const INJECTION_RETRY_DELAY_MS = 150;
 const USER_DATA_STORAGE_KEY = 'jobAutofill_userData';
 const SETTINGS_STORAGE_KEY = 'jobAutofill_settings';
+const RESUME_STORAGE_KEY = 'jobAutofill_resume';
+const RESUME_PARSED_STORAGE_KEY = 'jobAutofill_resumeParsed';
 const UPDATE_STATUS_STORAGE_KEY = 'jobAutofill_updateStatus';
 const MISTRAL_API_URL = 'https://api.mistral.ai/v1/chat/completions';
+const MISTRAL_OCR_API_URL = 'https://api.mistral.ai/v1/ocr';
+const MISTRAL_OCR_MODEL = 'mistral-ocr-latest';
 const GITHUB_REPO_OWNER = 'mihailgriniuc';
 const GITHUB_REPO_NAME = 'JobApplier';
 const GITHUB_REPO_API_URL = `https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
 const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}`;
 const UPDATE_CHECK_INTERVAL_MS = 1000 * 60 * 60 * 6;
+const PARSED_RESUME_SECTION_KEYS = [
+    'resumeSummary',
+    'skills',
+    'experienceHighlights',
+    'educationHighlights',
+    'certifications',
+    'projects'
+];
+const MAX_RESUME_OCR_TEXT_LENGTH = 120000;
+const MAX_STRUCTURED_RESUME_DEPTH = 6;
+const MAX_STRUCTURED_RESUME_ARRAY_ITEMS = 100;
+const MAX_STRUCTURED_RESUME_OBJECT_KEYS = 100;
+const MAX_RESUME_CONTEXT_JSON_LENGTH = 30000;
+const MAX_RESUME_OCR_PROMPT_LENGTH = 60000;
 let localAiConfigCache = null;
 
 function canUseExtensionRuntimeUrl() {
@@ -174,9 +192,622 @@ function getDefaultAiAssistSettings() {
         model: 'mistral-small-latest',
         apiKey: '',
         extraContext: '',
+        cacheAnswers: true,
+        useParsedResumeData: true,
         maxCharacters: 320,
         maxQuestionsPerRun: 10
     };
+}
+
+function sanitizeStringList(value, maxItems = 25, maxLength = 240) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    const seen = new Set();
+
+    return value
+        .map(item => typeof item === 'string' ? item.trim().slice(0, maxLength) : '')
+        .filter(Boolean)
+        .filter(item => {
+            const normalizedItem = item.toLowerCase();
+            if (seen.has(normalizedItem)) {
+                return false;
+            }
+
+            seen.add(normalizedItem);
+            return true;
+        })
+        .slice(0, maxItems);
+}
+
+function getIsoTimestamp(value, fallback = null) {
+    if (typeof value !== 'string') {
+        return fallback;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return fallback;
+    }
+
+    return Number.isNaN(Date.parse(trimmed)) ? fallback : trimmed;
+}
+
+function sanitizeStructuredResumeValue(value, depth = 0) {
+    if (depth > MAX_STRUCTURED_RESUME_DEPTH) {
+        return null;
+    }
+
+    if (typeof value === 'string') {
+        return value.trim().slice(0, 4000);
+    }
+
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : null;
+    }
+
+    if (typeof value === 'boolean') {
+        return value;
+    }
+
+    if (Array.isArray(value)) {
+        return value
+            .map(item => sanitizeStructuredResumeValue(item, depth + 1))
+            .filter(item => item !== null && item !== '')
+            .slice(0, MAX_STRUCTURED_RESUME_ARRAY_ITEMS);
+    }
+
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    const entries = Object.entries(value)
+        .slice(0, MAX_STRUCTURED_RESUME_OBJECT_KEYS)
+        .map(([key, entryValue]) => {
+            const normalizedKey = typeof key === 'string' ? key.trim() : '';
+            if (!normalizedKey) {
+                return null;
+            }
+
+            const sanitizedValue = sanitizeStructuredResumeValue(entryValue, depth + 1);
+            if (sanitizedValue === null || sanitizedValue === '') {
+                return null;
+            }
+
+            return [normalizedKey, sanitizedValue];
+        })
+        .filter(Boolean);
+
+    return entries.length > 0 ? Object.fromEntries(entries) : null;
+}
+
+function hasStructuredResumeValue(value, depth = 0) {
+    if (depth > MAX_STRUCTURED_RESUME_DEPTH || value === null || value === undefined) {
+        return false;
+    }
+
+    if (typeof value === 'string') {
+        return value.trim().length > 0;
+    }
+
+    if (typeof value === 'number') {
+        return Number.isFinite(value);
+    }
+
+    if (typeof value === 'boolean') {
+        return true;
+    }
+
+    if (Array.isArray(value)) {
+        return value.some(item => hasStructuredResumeValue(item, depth + 1));
+    }
+
+    if (typeof value === 'object') {
+        return Object.values(value).some(item => hasStructuredResumeValue(item, depth + 1));
+    }
+
+    return false;
+}
+
+function hasParsedResumeSections(parsedResume) {
+    if (!parsedResume || typeof parsedResume !== 'object') {
+        return false;
+    }
+
+    return PARSED_RESUME_SECTION_KEYS.some(key => {
+        const value = parsedResume[key];
+        return Array.isArray(value) ? value.length > 0 : Boolean(value);
+    });
+}
+
+function hasParsedResumeContent(parsedResume) {
+    if (!parsedResume || typeof parsedResume !== 'object') {
+        return false;
+    }
+
+    return hasParsedResumeSections(parsedResume)
+        || hasStructuredResumeValue(parsedResume.structuredData)
+        || (typeof parsedResume.ocrText === 'string' && parsedResume.ocrText.trim().length > 0);
+}
+
+function createDefaultParsedResumeData(resumeData) {
+    return normalizeParsedResumeData({
+        isParsed: false,
+        parser: '',
+        sourceFileName: resumeData?.name || '',
+        sourceUploadedAt: resumeData?.uploadedAt || null,
+        parsedAt: null,
+        updatedAt: new Date().toISOString(),
+        ocrText: '',
+        ocrPageCount: 0,
+        structuredData: null,
+        resumeSummary: '',
+        skills: [],
+        experienceHighlights: [],
+        educationHighlights: [],
+        certifications: [],
+        projects: []
+    });
+}
+
+function normalizeParsedResumeData(parsedResume) {
+    const source = parsedResume && typeof parsedResume === 'object' ? parsedResume : {};
+    const normalized = {
+        isParsed: source.isParsed === true,
+        parser: typeof source.parser === 'string' ? source.parser.trim() : '',
+        sourceFileName: typeof source.sourceFileName === 'string' ? source.sourceFileName.trim() : '',
+        sourceUploadedAt: getIsoTimestamp(source.sourceUploadedAt, null),
+        parsedAt: getIsoTimestamp(source.parsedAt, null),
+        updatedAt: getIsoTimestamp(source.updatedAt, new Date().toISOString()),
+        ocrText: typeof source.ocrText === 'string'
+            ? source.ocrText.trim().slice(0, MAX_RESUME_OCR_TEXT_LENGTH)
+            : '',
+        ocrPageCount: Number.isFinite(Number(source.ocrPageCount))
+            ? Math.max(0, Math.min(Math.round(Number(source.ocrPageCount)), 500))
+            : 0,
+        structuredData: sanitizeStructuredResumeValue(source.structuredData),
+        resumeSummary: typeof source.resumeSummary === 'string' ? source.resumeSummary.trim() : '',
+        skills: sanitizeStringList(source.skills, 40),
+        experienceHighlights: sanitizeStringList(source.experienceHighlights, 20),
+        educationHighlights: sanitizeStringList(source.educationHighlights, 12),
+        certifications: sanitizeStringList(source.certifications, 20),
+        projects: sanitizeStringList(source.projects, 20)
+    };
+
+    normalized.isParsed = normalized.isParsed && hasParsedResumeContent(normalized);
+    if (!normalized.isParsed) {
+        normalized.parsedAt = null;
+    }
+
+    return normalized;
+}
+
+function readNestedValue(source, path) {
+    if (!source || typeof source !== 'object' || typeof path !== 'string') {
+        return undefined;
+    }
+
+    return path.split('.').reduce((current, segment) => {
+        if (!current || typeof current !== 'object') {
+            return undefined;
+        }
+
+        return current[segment];
+    }, source);
+}
+
+function firstStringValue(source, paths, fallback = '') {
+    for (const path of paths) {
+        const value = readNestedValue(source, path);
+        if (typeof value === 'string' && value.trim()) {
+            return value.trim();
+        }
+    }
+
+    return fallback;
+}
+
+function firstArrayValue(source, paths) {
+    for (const path of paths) {
+        const value = readNestedValue(source, path);
+        if (Array.isArray(value)) {
+            return value;
+        }
+    }
+
+    return [];
+}
+
+function formatResumeTimeline(startDate, endDate, current) {
+    const parts = [];
+    if (typeof startDate === 'string' && startDate.trim()) {
+        parts.push(startDate.trim());
+    }
+
+    if (typeof endDate === 'string' && endDate.trim()) {
+        parts.push(endDate.trim());
+    } else if (current === true) {
+        parts.push('Present');
+    }
+
+    return parts.length > 0 ? parts.join(' - ') : '';
+}
+
+function summarizeStructuredEntries(entries, formatter, maxItems) {
+    if (!Array.isArray(entries)) {
+        return [];
+    }
+
+    return sanitizeStringList(entries.map(entry => formatter(entry)).filter(Boolean), maxItems, 280);
+}
+
+function summarizeExperienceEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+        return '';
+    }
+
+    const title = firstStringValue(entry, ['title', 'role', 'position']);
+    const company = firstStringValue(entry, ['company', 'organization', 'employer']);
+    const timeline = formatResumeTimeline(entry.startDate, entry.endDate, entry.current);
+    const summary = firstStringValue(entry, ['summary', 'description']);
+    const lead = [
+        title && company ? `${title} at ${company}` : (title || company),
+        timeline ? `(${timeline})` : ''
+    ].filter(Boolean).join(' ');
+
+    return [lead, summary].filter(Boolean).join(' - ');
+}
+
+function summarizeEducationEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+        return '';
+    }
+
+    const degree = firstStringValue(entry, ['degree', 'credential']);
+    const fieldOfStudy = firstStringValue(entry, ['fieldOfStudy', 'field', 'major']);
+    const institution = firstStringValue(entry, ['institution', 'school', 'university']);
+    const timeline = formatResumeTimeline(entry.startDate, entry.endDate, false);
+    const lead = [
+        [degree, fieldOfStudy].filter(Boolean).join(', '),
+        institution
+    ].filter(Boolean).join(' at ');
+
+    return [lead || institution, timeline ? `(${timeline})` : ''].filter(Boolean).join(' ');
+}
+
+function summarizeCertificationEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+        return '';
+    }
+
+    const name = firstStringValue(entry, ['name', 'title']);
+    const issuer = firstStringValue(entry, ['issuer', 'organization']);
+    const issuedAt = firstStringValue(entry, ['date', 'issuedAt']);
+    return [name, issuer ? `by ${issuer}` : '', issuedAt ? `(${issuedAt})` : ''].filter(Boolean).join(' ');
+}
+
+function summarizeProjectEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+        return '';
+    }
+
+    const name = firstStringValue(entry, ['name', 'title']);
+    const role = firstStringValue(entry, ['role']);
+    const summary = firstStringValue(entry, ['summary', 'description']);
+    return [name, role ? `(${role})` : '', summary ? `- ${summary}` : ''].filter(Boolean).join(' ');
+}
+
+function buildParsedResumeFromStructuredData(resumeData, ocrResult, structuredData) {
+    const now = new Date().toISOString();
+    const sanitizedStructuredData = sanitizeStructuredResumeValue(structuredData);
+    const summary = firstStringValue(sanitizedStructuredData, [
+        'resumeSummary',
+        'summary',
+        'professionalSummary',
+        'basics.summary',
+        'basics.headline'
+    ]);
+    const skills = sanitizeStringList([
+        ...firstArrayValue(sanitizedStructuredData, ['skills', 'coreSkills']),
+        ...firstArrayValue(sanitizedStructuredData, ['languages']),
+        ...firstArrayValue(sanitizedStructuredData, ['tools'])
+    ], 40);
+    const workExperience = firstArrayValue(sanitizedStructuredData, ['workExperience', 'experience', 'employment']);
+    const education = firstArrayValue(sanitizedStructuredData, ['education', 'educationHistory']);
+    const certifications = firstArrayValue(sanitizedStructuredData, ['certifications', 'licenses']);
+    const projects = firstArrayValue(sanitizedStructuredData, ['projects']);
+
+    return normalizeParsedResumeData({
+        isParsed: true,
+        parser: MISTRAL_OCR_MODEL,
+        sourceFileName: resumeData?.name || '',
+        sourceUploadedAt: resumeData?.uploadedAt || null,
+        parsedAt: now,
+        updatedAt: now,
+        ocrText: ocrResult?.text || '',
+        ocrPageCount: ocrResult?.pageCount || 0,
+        structuredData: sanitizedStructuredData,
+        resumeSummary: summary,
+        skills,
+        experienceHighlights: summarizeStructuredEntries(workExperience, summarizeExperienceEntry, 20),
+        educationHighlights: summarizeStructuredEntries(education, summarizeEducationEntry, 12),
+        certifications: summarizeStructuredEntries(certifications, summarizeCertificationEntry, 20),
+        projects: summarizeStructuredEntries(projects, summarizeProjectEntry, 20)
+    });
+}
+
+function parseJsonObjectFromText(rawText) {
+    const responseText = typeof rawText === 'string' ? rawText.trim() : '';
+    if (!responseText) {
+        throw new Error('Mistral returned an empty resume parsing response.');
+    }
+
+    const cleaned = responseText
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```$/i, '')
+        .trim();
+
+    const candidates = [cleaned];
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+        candidates.push(cleaned.slice(firstBrace, lastBrace + 1));
+    }
+
+    for (const candidate of candidates) {
+        try {
+            const parsed = JSON.parse(candidate);
+            if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+                return parsed;
+            }
+        } catch (error) {
+            continue;
+        }
+    }
+
+    throw new Error('Could not parse structured resume JSON from the model response.');
+}
+
+async function getStoredResumeData() {
+    const result = await chrome.storage.local.get([RESUME_STORAGE_KEY]);
+    return result[RESUME_STORAGE_KEY] || null;
+}
+
+async function getStoredParsedResumeData() {
+    const result = await chrome.storage.local.get([RESUME_STORAGE_KEY, RESUME_PARSED_STORAGE_KEY]);
+    const resume = result[RESUME_STORAGE_KEY] || null;
+    const parsedResume = result[RESUME_PARSED_STORAGE_KEY] || null;
+
+    if (parsedResume) {
+        return normalizeParsedResumeData(parsedResume);
+    }
+
+    return resume ? createDefaultParsedResumeData(resume) : null;
+}
+
+async function saveParsedResumeData(parsedResumeData) {
+    const resume = await getStoredResumeData();
+    const normalized = normalizeParsedResumeData({
+        ...(resume ? createDefaultParsedResumeData(resume) : {}),
+        ...(parsedResumeData || {})
+    });
+
+    await chrome.storage.local.set({
+        [RESUME_PARSED_STORAGE_KEY]: normalized
+    });
+
+    return normalized;
+}
+
+function isResumeParsingCurrent(resume, parsedResume) {
+    if (!resume || !parsedResume || parsedResume.isParsed !== true) {
+        return false;
+    }
+
+    return parsedResume.sourceFileName === (resume.name || '')
+        && parsedResume.sourceUploadedAt === (resume.uploadedAt || null)
+        && hasParsedResumeContent(parsedResume);
+}
+
+async function requestResumeOcr(resumeData, apiKey) {
+    const documentUrl = typeof resumeData?.data === 'string' ? resumeData.data.trim() : '';
+    if (!documentUrl || !documentUrl.startsWith('data:')) {
+        throw new Error('Stored resume data is missing a readable document payload.');
+    }
+
+    const response = await fetch(MISTRAL_OCR_API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: MISTRAL_OCR_MODEL,
+            document: {
+                type: 'document_url',
+                document_url: documentUrl
+            },
+            include_image_base64: false
+        })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const apiMessage = data?.message || data?.error?.message || `Mistral OCR request failed with ${response.status}`;
+        throw new Error(apiMessage);
+    }
+
+    const pages = Array.isArray(data?.pages) ? data.pages : [];
+    const markdownPages = pages
+        .map(page => typeof page?.markdown === 'string' ? page.markdown.trim() : '')
+        .filter(Boolean);
+
+    if (markdownPages.length === 0) {
+        throw new Error('Mistral OCR did not return any readable resume pages.');
+    }
+
+    const text = markdownPages.join('\n\n--- Page Break ---\n\n').trim().slice(0, MAX_RESUME_OCR_TEXT_LENGTH);
+    return {
+        pageCount: pages.length || markdownPages.length,
+        text,
+        pages: markdownPages
+    };
+}
+
+function buildResumeStructuringMessages(resumeData, ocrResult) {
+    const truncatedText = (ocrResult?.text || '').slice(0, MAX_RESUME_OCR_PROMPT_LENGTH);
+
+    return [
+        {
+            role: 'system',
+            content: [
+                'You extract resume data into strict JSON for downstream autofill and job application assistance.',
+                'Use only the OCR text provided from the resume document.',
+                'Do not invent employers, dates, degrees, skills, certifications, links, or achievements.',
+                'If a field is missing, use an empty string, false, or an empty array.',
+                'Return JSON only with this exact top-level shape:',
+                '{"basics":{"name":"","email":"","phone":"","location":"","headline":"","summary":"","linkedin":"","website":"","github":"","portfolio":""},"skills":[],"workExperience":[{"company":"","title":"","location":"","startDate":"","endDate":"","current":false,"summary":"","highlights":[],"technologies":[]}],"education":[{"institution":"","degree":"","fieldOfStudy":"","location":"","startDate":"","endDate":"","gpa":"","highlights":[]}],"certifications":[{"name":"","issuer":"","date":"","credentialId":"","url":""}],"projects":[{"name":"","role":"","summary":"","url":"","technologies":[],"highlights":[]}],"languages":[],"awards":[],"publications":[],"volunteerExperience":[{"organization":"","role":"","startDate":"","endDate":"","summary":"","highlights":[]}],"additionalSections":[{"title":"","items":[]}]}',
+                'Preserve wording from the resume when possible, but keep list items concise.'
+            ].join(' ')
+        },
+        {
+            role: 'user',
+            content: [
+                `Resume file: ${resumeData?.name || ''}`,
+                `OCR page count: ${ocrResult?.pageCount || 0}`,
+                'OCR markdown:',
+                truncatedText
+            ].join('\n\n')
+        }
+    ];
+}
+
+async function structureResumeFromOcr(resumeData, ocrResult, aiSettings) {
+    const response = await fetch(MISTRAL_API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Authorization: `Bearer ${aiSettings.apiKey}`
+        },
+        body: JSON.stringify({
+            model: aiSettings.model || 'mistral-small-latest',
+            temperature: 0.1,
+            top_p: 0.8,
+            messages: buildResumeStructuringMessages(resumeData, ocrResult)
+        })
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+        const apiMessage = data?.message || data?.error?.message || `Mistral request failed with ${response.status}`;
+        throw new Error(apiMessage);
+    }
+
+    const answer = data?.choices?.[0]?.message?.content?.trim();
+    if (!answer) {
+        throw new Error('Mistral returned an empty structured resume response.');
+    }
+
+    return parseJsonObjectFromText(answer);
+}
+
+async function parseAndStoreResumeData({ force = false } = {}) {
+    const resume = await getStoredResumeData();
+    if (!resume) {
+        throw new Error('No resume is currently stored.');
+    }
+
+    const existingParsedResume = await getStoredParsedResumeData();
+    if (!force && isResumeParsingCurrent(resume, existingParsedResume)) {
+        return existingParsedResume;
+    }
+
+    const settings = await getStoredSettings();
+    const aiSettings = settings.aiAssist || getDefaultAiAssistSettings();
+
+    if (!aiSettings.enabled) {
+        throw new Error('AI assistance is disabled in settings.');
+    }
+
+    if (!aiSettings.apiKey) {
+        throw new Error('Missing Mistral API key. Add it in Settings > AI Assistance.');
+    }
+
+    const ocrResult = await requestResumeOcr(resume, aiSettings.apiKey);
+    const structuredData = await structureResumeFromOcr(resume, ocrResult, aiSettings);
+    return await saveParsedResumeData(buildParsedResumeFromStructuredData(resume, ocrResult, structuredData));
+}
+
+async function ensureParsedResumeData() {
+    const resume = await getStoredResumeData();
+    if (!resume) {
+        return null;
+    }
+
+    const parsedResume = await getStoredParsedResumeData();
+    if (isResumeParsingCurrent(resume, parsedResume)) {
+        return parsedResume;
+    }
+
+    try {
+        return await parseAndStoreResumeData();
+    } catch (error) {
+        console.warn('[JobAutofill] Failed to refresh structured resume data:', error);
+        return parsedResume;
+    }
+}
+
+function buildStoredResumeContextText(parsedResume) {
+    if (!parsedResume || parsedResume.isParsed !== true) {
+        return '';
+    }
+
+    const sections = [
+        parsedResume.resumeSummary ? `Resume summary:\n${parsedResume.resumeSummary}` : '',
+        parsedResume.skills?.length ? `Skills:\n- ${parsedResume.skills.join('\n- ')}` : '',
+        parsedResume.experienceHighlights?.length ? `Experience highlights:\n- ${parsedResume.experienceHighlights.join('\n- ')}` : '',
+        parsedResume.educationHighlights?.length ? `Education highlights:\n- ${parsedResume.educationHighlights.join('\n- ')}` : '',
+        parsedResume.certifications?.length ? `Certifications:\n- ${parsedResume.certifications.join('\n- ')}` : '',
+        parsedResume.projects?.length ? `Projects:\n- ${parsedResume.projects.join('\n- ')}` : ''
+    ].filter(Boolean);
+
+    const structuredJson = parsedResume.structuredData
+        ? JSON.stringify(parsedResume.structuredData, null, 2).slice(0, MAX_RESUME_CONTEXT_JSON_LENGTH)
+        : '';
+
+    if (structuredJson) {
+        sections.push(`Structured resume JSON:\n${structuredJson}`);
+    }
+
+    return sections.join('\n\n');
+}
+
+async function resolveResumeContext(payload, aiSettings) {
+    const providedContext = typeof payload?.resumeContext === 'string' ? payload.resumeContext.trim() : '';
+    if (providedContext || aiSettings?.useParsedResumeData === false) {
+        return providedContext;
+    }
+
+    const parsedResume = await ensureParsedResumeData();
+    return buildStoredResumeContextText(parsedResume);
+}
+
+async function resolveParsedResumeData(payload, aiSettings) {
+    if (aiSettings?.useParsedResumeData === false) {
+        return null;
+    }
+
+    const providedParsedResume = sanitizeStructuredResumeValue(payload?.parsedResumeData);
+    if (providedParsedResume) {
+        return providedParsedResume;
+    }
+
+    const parsedResume = await ensureParsedResumeData();
+    return sanitizeStructuredResumeValue(parsedResume?.structuredData);
 }
 
 async function loadLocalAiConfig() {
@@ -240,6 +871,9 @@ function buildAiMessages(payload, aiSettings) {
     const choiceOptions = Array.isArray(payload.choiceOptions) ? payload.choiceOptions.filter(Boolean) : [];
     const isChoicePrompt = choiceOptions.length > 0;
     const resumeContext = (payload.resumeContext || '').trim();
+    const parsedResumeJson = payload.parsedResumeData
+        ? JSON.stringify(payload.parsedResumeData, null, 2).slice(0, MAX_RESUME_CONTEXT_JSON_LENGTH)
+        : '';
 
     return [
         {
@@ -248,10 +882,10 @@ function buildAiMessages(payload, aiSettings) {
                 'You write concise, job-application answers for screening questions.',
                 'Use only the provided profile, job posting, and extra context.',
                 'Do not invent employers, years, certifications, tools, or achievements not present in the context.',
-                'If structured resume context is provided, prioritize those facts and phrasing over generic filler.',
+                'If structured resume context or parsed resume JSON is provided, treat it as the strongest resume evidence and prioritize those facts and phrasing over generic filler.',
                 'Answer only the specific question for the specific field shown in the prompt.',
                 'If helper text narrows the answer, follow it.',
-                isChoicePrompt ? 'When options are provided, act like an autofill copilot for this single field. Prefer the relevant profile facts for this field over the full profile, ignore unrelated profile details, and choose the single option label that best matches the user. Return exactly one option label from the list and do not explain your choice.' : '',
+                isChoicePrompt ? 'When options are provided, act like an autofill copilot for this single field. Prefer parsed resume JSON and the relevant profile facts for this field over the full profile, ignore unrelated details, and choose the single option label that best matches the user. Return exactly one option label from the list and do not explain your choice.' : 'When generating typed answers, ground the answer in parsed resume JSON and structured resume context whenever they are available.',
                 isChoicePrompt && payload.preferredProfileAnswer ? `The saved profile answer for this field is: ${payload.preferredProfileAnswer}. You must choose the option that matches this saved answer and never choose the opposite meaning.` : '',
                 'Answer in first person, keep it professional but natural, and tailor it to the job posting when relevant.',
                 `Return plain text only and keep the answer under ${maxCharacters} characters unless the question explicitly asks for more detail.`
@@ -272,6 +906,7 @@ function buildAiMessages(payload, aiSettings) {
                 `Page title: ${payload.pageTitle || ''}`,
                 'User profile:',
                 userProfile,
+                parsedResumeJson ? `Parsed resume JSON:\n${parsedResumeJson}` : '',
                 resumeContext ? `Structured resume context:\n${resumeContext}` : '',
                 aiSettings.extraContext ? `Additional resume context: ${aiSettings.extraContext}` : '',
                 payload.jobPostingText ? `Job posting excerpt:\n${payload.jobPostingText}` : ''
@@ -285,10 +920,14 @@ function buildAiBatchMessages(payloads, aiSettings) {
     const firstPayload = payloads[0] || {};
     const userProfile = JSON.stringify(firstPayload.userProfile || {}, null, 2);
     const resumeContext = (firstPayload.resumeContext || '').trim();
+    const parsedResumeJson = firstPayload.parsedResumeData
+        ? JSON.stringify(firstPayload.parsedResumeData, null, 2).slice(0, MAX_RESUME_CONTEXT_JSON_LENGTH)
+        : '';
     const sharedContext = [
         `Page title: ${firstPayload.pageTitle || ''}`,
         'User profile:',
         userProfile,
+        parsedResumeJson ? `Parsed resume JSON:\n${parsedResumeJson}` : '',
         resumeContext ? `Structured resume context:\n${resumeContext}` : '',
         aiSettings.extraContext ? `Additional resume context: ${aiSettings.extraContext}` : '',
         firstPayload.jobPostingText ? `Job posting excerpt:\n${firstPayload.jobPostingText}` : ''
@@ -319,7 +958,8 @@ function buildAiBatchMessages(payloads, aiSettings) {
                 'You write concise, job-application answers for screening questions.',
                 'Use only the provided profile, job posting, and extra context.',
                 'Do not invent employers, years, certifications, tools, or achievements not present in the context.',
-                'If a task includes options, act like an autofill copilot for that single field. Prefer the relevant profile facts for that field over the full profile, choose the single option label that best matches the user, and never return an opposite meaning to the saved profile answer.',
+                'If parsed resume JSON or structured resume context is provided, treat it as the strongest resume evidence.',
+                'If a task includes options, act like an autofill copilot for that single field. Prefer parsed resume JSON and the relevant profile facts for that field over the full profile, choose the single option label that best matches the user, and never return an opposite meaning to the saved profile answer.',
                 'Return strict JSON only with this shape: {"answers":[{"index":0,"answer":"..."}]}.',
                 'Include one answer for every task index in order.',
                 `Each answer must be plain text and under ${maxCharacters} characters unless the task explicitly asks for more detail.`
@@ -388,6 +1028,14 @@ async function generateMistralAnswer(payload) {
         throw new Error('Missing Mistral API key. Add it in Settings > AI Assistance.');
     }
 
+    const resumeContext = await resolveResumeContext(payload, aiSettings);
+    const parsedResumeData = await resolveParsedResumeData(payload, aiSettings);
+    const requestPayload = {
+        ...(payload || {}),
+        resumeContext,
+        parsedResumeData
+    };
+
     const response = await fetch(MISTRAL_API_URL, {
         method: 'POST',
         headers: {
@@ -399,7 +1047,7 @@ async function generateMistralAnswer(payload) {
             model: aiSettings.model || 'mistral-small-latest',
             temperature: 0.4,
             top_p: 0.9,
-            messages: buildAiMessages(payload, aiSettings)
+            messages: buildAiMessages(requestPayload, aiSettings)
         })
     });
 
@@ -446,6 +1094,16 @@ async function generateMistralAnswerBatch(payloads) {
         throw new Error('Missing Mistral API key. Add it in Settings > AI Assistance.');
     }
 
+    const resumeContext = await resolveResumeContext(requests[0] || {}, aiSettings);
+    const parsedResumeData = await resolveParsedResumeData(requests[0] || {}, aiSettings);
+    const enrichedRequests = requests.map(payload => ({
+        ...payload,
+        resumeContext: typeof payload?.resumeContext === 'string' && payload.resumeContext.trim()
+            ? payload.resumeContext.trim()
+            : resumeContext,
+        parsedResumeData: payload?.parsedResumeData || parsedResumeData
+    }));
+
     const response = await fetch(MISTRAL_API_URL, {
         method: 'POST',
         headers: {
@@ -457,7 +1115,7 @@ async function generateMistralAnswerBatch(payloads) {
             model: aiSettings.model || 'mistral-small-latest',
             temperature: 0.2,
             top_p: 0.9,
-            messages: buildAiBatchMessages(requests, aiSettings)
+            messages: buildAiBatchMessages(enrichedRequests, aiSettings)
         })
     });
 
@@ -664,6 +1322,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     success: false,
                     error: error.message || 'Failed to load local AI config',
                     aiConfig: {}
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (message.action === 'parseStoredResume') {
+        (async () => {
+            try {
+                const parsedResume = await parseAndStoreResumeData({ force: message.force === true });
+                sendResponse({ success: true, parsedResume });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error.message || 'Failed to parse the stored resume.'
                 });
             }
         })();

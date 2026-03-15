@@ -13,6 +13,8 @@
         option: 'select__option',
         indicator: 'select__indicator'
     };
+    const EDUCATION_DEGREE_KEYWORDS = ['degree', 'education level', 'level of education', 'highest education', 'academic level'];
+    const EDUCATION_SCHOOL_KEYWORDS = ['school', 'university', 'college', 'institution', 'academy'];
 
     // Prevent multiple initializations
     if (window.jobAutofillInitialized) return;
@@ -1514,6 +1516,11 @@
                 return null;
             }
 
+            const structuredData = this.parsedResumeData.structuredData
+                && typeof this.parsedResumeData.structuredData === 'object'
+                && !Array.isArray(this.parsedResumeData.structuredData)
+                ? this.parsedResumeData.structuredData
+                : null;
             const sections = {
                 resumeSummary: typeof this.parsedResumeData.resumeSummary === 'string'
                     ? this.parsedResumeData.resumeSummary.trim()
@@ -1532,10 +1539,21 @@
                     : [],
                 projects: Array.isArray(this.parsedResumeData.projects)
                     ? this.parsedResumeData.projects.filter(Boolean)
-                    : []
+                    : [],
+                structuredData
             };
 
-            const hasContent = Object.values(sections).some(value => Array.isArray(value) ? value.length > 0 : Boolean(value));
+            const hasContent = Object.values(sections).some(value => {
+                if (Array.isArray(value)) {
+                    return value.length > 0;
+                }
+
+                if (value && typeof value === 'object') {
+                    return Object.keys(value).length > 0;
+                }
+
+                return Boolean(value);
+            });
             return hasContent ? sections : null;
         },
 
@@ -1545,14 +1563,307 @@
                 return '';
             }
 
+            const structuredJson = sections.structuredData
+                ? JSON.stringify(sections.structuredData, null, 2).slice(0, 30000)
+                : '';
+
             return [
                 sections.resumeSummary ? `Resume summary:\n${sections.resumeSummary}` : '',
                 sections.skills.length ? `Skills:\n- ${sections.skills.join('\n- ')}` : '',
                 sections.experienceHighlights.length ? `Experience highlights:\n- ${sections.experienceHighlights.join('\n- ')}` : '',
                 sections.educationHighlights.length ? `Education highlights:\n- ${sections.educationHighlights.join('\n- ')}` : '',
                 sections.certifications.length ? `Certifications:\n- ${sections.certifications.join('\n- ')}` : '',
-                sections.projects.length ? `Projects:\n- ${sections.projects.join('\n- ')}` : ''
+                sections.projects.length ? `Projects:\n- ${sections.projects.join('\n- ')}` : '',
+                structuredJson ? `Structured resume JSON:\n${structuredJson}` : ''
             ].filter(Boolean).join('\n\n');
+        },
+
+        getAiParsedResumePayload() {
+            if (!this.settings?.aiAssist?.useParsedResumeData || !this.parsedResumeData?.structuredData) {
+                return null;
+            }
+
+            return this.parsedResumeData.structuredData;
+        },
+
+        getParsedResumeEducationEntries() {
+            const parsedResume = this.getAiParsedResumePayload();
+            if (!parsedResume) {
+                return [];
+            }
+
+            const education = Array.isArray(parsedResume.education)
+                ? parsedResume.education
+                : Array.isArray(parsedResume.educationHistory)
+                    ? parsedResume.educationHistory
+                    : [];
+
+            return education.filter(entry => entry && typeof entry === 'object');
+        },
+
+        getPrimaryEducationEntry() {
+            return this.getParsedResumeEducationEntries()[0] || null;
+        },
+
+        getEducationDegreeText(entry = null) {
+            const educationEntry = entry || this.getPrimaryEducationEntry();
+            if (!educationEntry) {
+                return '';
+            }
+
+            return [educationEntry.degree, educationEntry.credential, educationEntry.fieldOfStudy]
+                .filter(value => typeof value === 'string' && value.trim())
+                .join(' ')
+                .trim();
+        },
+
+        getEducationSchoolText(entry = null) {
+            const educationEntry = entry || this.getPrimaryEducationEntry();
+            if (!educationEntry) {
+                return '';
+            }
+
+            return [educationEntry.institution, educationEntry.school, educationEntry.university]
+                .find(value => typeof value === 'string' && value.trim())
+                ?.trim() || '';
+        },
+
+        getEducationDegreeAliases(rawValue) {
+            const normalizedValue = this.normalizeText(rawValue || '');
+            if (!normalizedValue) {
+                return [];
+            }
+
+            const aliases = new Set([normalizedValue]);
+            const tokens = new Set(normalizedValue.split(' ').filter(Boolean));
+            const hasToken = token => tokens.has(token);
+
+            if (
+                normalizedValue.includes('bachelor') ||
+                normalizedValue.includes('bachelors') ||
+                normalizedValue.includes('bachelor of science') ||
+                normalizedValue.includes('bachelor of arts') ||
+                normalizedValue.includes('bachelor science') ||
+                normalizedValue.includes('bachelor arts') ||
+                hasToken('bs') ||
+                hasToken('ba') ||
+                (hasToken('b') && (hasToken('s') || hasToken('a')))
+            ) {
+                [
+                    'bachelor',
+                    'bachelor degree',
+                    'bachelor s degree',
+                    'bachelor of science',
+                    'bachelor of arts',
+                    'bs',
+                    'ba',
+                    'b s',
+                    'b a'
+                ].forEach(alias => aliases.add(alias));
+            }
+
+            if (normalizedValue.includes('master') || normalizedValue.includes('mba') || normalizedValue.includes('m b a')) {
+                ['master', 'master degree', 'master s degree', 'master of business administration', 'mba', 'm b a'].forEach(alias => aliases.add(alias));
+            }
+
+            if (normalizedValue.includes('associate')) {
+                ['associate', 'associate s degree', 'associate degree'].forEach(alias => aliases.add(alias));
+            }
+
+            if (normalizedValue.includes('doctor') || normalizedValue.includes('phd') || normalizedValue.includes('ph d')) {
+                ['doctorate', 'doctoral', 'doctor of philosophy', 'phd', 'ph d'].forEach(alias => aliases.add(alias));
+            }
+
+            return Array.from(aliases);
+        },
+
+        getEducationDegreeCategory(rawValue) {
+            const normalizedValue = this.normalizeText(rawValue || '');
+            if (!normalizedValue) {
+                return '';
+            }
+
+            const tokens = new Set(normalizedValue.split(' ').filter(Boolean));
+            const hasToken = token => tokens.has(token);
+
+            if (normalizedValue.includes('associate')) return 'associate';
+            if (
+                normalizedValue.includes('bachelor') ||
+                normalizedValue.includes('bachelors') ||
+                normalizedValue.includes('bachelor of science') ||
+                normalizedValue.includes('bachelor of arts') ||
+                normalizedValue.includes('bachelor science') ||
+                normalizedValue.includes('bachelor arts') ||
+                hasToken('bs') ||
+                hasToken('ba') ||
+                (hasToken('b') && (hasToken('s') || hasToken('a')))
+            ) return 'bachelor';
+            if (normalizedValue.includes('master') || normalizedValue.includes('mba')) return 'master';
+            if (normalizedValue.includes('doctor') || normalizedValue.includes('phd') || normalizedValue.includes('ph d') || normalizedValue.includes('juris doctor') || normalizedValue.includes('m d')) return 'doctorate';
+            if (normalizedValue.includes('engineer')) return 'engineer';
+            return '';
+        },
+
+        inferEducationChoiceFieldType(...values) {
+            const optionTexts = values
+                .flatMap(value => Array.isArray(value) ? value : [value])
+                .map(value => typeof value === 'string' ? value : value?.text || '')
+                .filter(Boolean);
+            const normalizedText = this.normalizeText(optionTexts.join(' '));
+            if (!normalizedText) {
+                return null;
+            }
+
+            const hasDegreeKeyword = EDUCATION_DEGREE_KEYWORDS.some(keyword => normalizedText.includes(keyword));
+            const hasSchoolKeyword = EDUCATION_SCHOOL_KEYWORDS.some(keyword => normalizedText.includes(keyword));
+            const hasDegreeOptions = optionTexts.some(text => {
+                const normalizedOption = this.normalizeText(text);
+                return ['associate', 'bachelor', 'master', 'doctor', 'mba', 'phd', 'degree'].some(token => normalizedOption.includes(token));
+            });
+            const hasSchoolOptions = optionTexts.some(text => {
+                const normalizedOption = this.normalizeText(text);
+                return ['university', 'college', 'school', 'institute', 'academy'].some(token => normalizedOption.includes(token));
+            });
+
+            if (hasDegreeKeyword || hasDegreeOptions) {
+                return 'educationDegree';
+            }
+
+            if (hasSchoolKeyword || hasSchoolOptions) {
+                return 'educationSchool';
+            }
+
+            return null;
+        },
+
+        findOtherChoiceOption(options) {
+            if (!Array.isArray(options) || options.length === 0) {
+                return null;
+            }
+
+            return options.find(option => {
+                const normalizedText = this.normalizeText(option?.text || option?.textContent || option?.value || '');
+                return normalizedText === 'other' || normalizedText.startsWith('other ');
+            }) || null;
+        },
+
+        findStrictOtherChoiceOption(options) {
+            if (!Array.isArray(options) || options.length === 0) {
+                return null;
+            }
+
+            return options.find(option => {
+                const normalizedText = this.normalizeText(option?.text || option?.textContent || option?.value || '');
+                return normalizedText === 'other';
+            }) || null;
+        },
+
+        findEducationDegreeOption(options) {
+            const degreeText = this.getEducationDegreeText();
+            const aliases = this.getEducationDegreeAliases(degreeText);
+            const degreeCategory = this.getEducationDegreeCategory(degreeText);
+
+            if (!Array.isArray(options) || options.length === 0 || aliases.length === 0) {
+                return null;
+            }
+
+            let bestMatch = null;
+            let bestScore = -1;
+
+            for (const option of options) {
+                const normalizedOption = this.normalizeText(option?.text || option?.textContent || option?.value || '');
+                if (!normalizedOption) {
+                    continue;
+                }
+
+                let score = 0;
+                const optionCategory = this.getEducationDegreeCategory(normalizedOption);
+                if (degreeCategory) {
+                    if (!optionCategory) {
+                        score -= 20;
+                    } else if (optionCategory === degreeCategory) {
+                        score += 140;
+                    } else {
+                        score -= 220;
+                    }
+                }
+
+                aliases.forEach(alias => {
+                    if (normalizedOption === alias) {
+                        score += 100;
+                    } else if (normalizedOption.includes(alias) || alias.includes(normalizedOption)) {
+                        score += 55;
+                    }
+                });
+
+                const aliasTokens = new Set(aliases.flatMap(alias => alias.split(' ').filter(Boolean)));
+                normalizedOption.split(' ').filter(Boolean).forEach(token => {
+                    if (aliasTokens.has(token)) {
+                        score += 6;
+                    }
+                });
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = option;
+                }
+            }
+
+            return bestScore >= 40 ? bestMatch : null;
+        },
+
+        findEducationSchoolOption(options) {
+            const schoolText = this.getEducationSchoolText();
+            const normalizedSchool = this.normalizeText(schoolText);
+
+            if (!Array.isArray(options) || options.length === 0 || !normalizedSchool) {
+                return null;
+            }
+
+            let bestMatch = null;
+            let bestScore = -1;
+
+            for (const option of options) {
+                const normalizedOption = this.normalizeText(option?.text || option?.textContent || option?.value || '');
+                if (!normalizedOption) {
+                    continue;
+                }
+
+                let score = 0;
+                if (normalizedOption === normalizedSchool) {
+                    score += 160;
+                }
+
+                if (normalizedOption.includes(normalizedSchool) || normalizedSchool.includes(normalizedOption)) {
+                    score += 90;
+                }
+
+                const schoolTokens = new Set(normalizedSchool.split(' ').filter(token => token.length >= 3));
+                normalizedOption.split(' ').filter(Boolean).forEach(token => {
+                    if (schoolTokens.has(token)) {
+                        score += 8;
+                    }
+                });
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = option;
+                }
+            }
+
+            return bestScore >= 24 ? bestMatch : null;
+        },
+
+        findEducationChoiceOption(options, fieldType) {
+            if (fieldType === 'educationDegree') {
+                return this.findEducationDegreeOption(options);
+            }
+
+            if (fieldType === 'educationSchool') {
+                return this.findEducationSchoolOption(options) || this.findOtherChoiceOption(options);
+            }
+
+            return null;
         },
 
         computeAiAnswerCacheKey(payload) {
@@ -1571,6 +1882,7 @@
                 choiceOptions: Array.isArray(payload?.choiceOptions)
                     ? payload.choiceOptions.map(option => String(option || '').trim()).filter(Boolean)
                     : [],
+                parsedResumeData: payload?.parsedResumeData || null,
                 userProfile: payload?.userProfile || {}
             };
             const serialized = JSON.stringify(normalizedPayload);
@@ -1692,6 +2004,7 @@
                 ...payload,
                 userProfile: payload?.userProfile || this.buildAiUserProfile(),
                 relevantProfileContext: payload?.relevantProfileContext || this.buildRelevantProfileContext(inferredFieldType, payload),
+                parsedResumeData: payload?.parsedResumeData || this.getAiParsedResumePayload(),
                 resumeContext: typeof payload?.resumeContext === 'string'
                     ? payload.resumeContext.trim()
                     : this.buildResumeContextText()
@@ -1957,6 +2270,18 @@
                 profile.educationHighlights = parsedResumeSections.educationHighlights;
                 profile.certifications = parsedResumeSections.certifications;
                 profile.projects = parsedResumeSections.projects;
+                profile.structuredResumeAvailable = Boolean(parsedResumeSections.structuredData);
+            }
+
+            const primaryEducation = this.getPrimaryEducationEntry();
+            if (primaryEducation) {
+                profile.primaryEducation = {
+                    institution: this.getEducationSchoolText(primaryEducation),
+                    degree: this.getEducationDegreeText(primaryEducation),
+                    fieldOfStudy: primaryEducation.fieldOfStudy || '',
+                    startDate: primaryEducation.startDate || '',
+                    endDate: primaryEducation.endDate || ''
+                };
             }
 
             return profile;
@@ -1966,6 +2291,7 @@
             const profile = this.buildAiUserProfile();
             const normalizedFieldType = String(fieldType || '').trim();
             const relevant = {};
+            const parsedResumeSections = this.getParsedResumeSections();
 
             const assign = (key, value) => {
                 if (value === null || typeof value === 'undefined') {
@@ -1981,6 +2307,19 @@
                 }
 
                 relevant[key] = value;
+            };
+
+            const addResumeFacts = () => {
+                if (!parsedResumeSections) {
+                    return;
+                }
+
+                assign('resumeSummary', parsedResumeSections.resumeSummary);
+                assign('resumeSkills', Array.isArray(parsedResumeSections.skills) ? parsedResumeSections.skills.slice(0, 12) : []);
+                assign('experienceHighlights', Array.isArray(parsedResumeSections.experienceHighlights) ? parsedResumeSections.experienceHighlights.slice(0, 8) : []);
+                assign('educationHighlights', Array.isArray(parsedResumeSections.educationHighlights) ? parsedResumeSections.educationHighlights.slice(0, 6) : []);
+                assign('certifications', Array.isArray(parsedResumeSections.certifications) ? parsedResumeSections.certifications.slice(0, 6) : []);
+                assign('projects', Array.isArray(parsedResumeSections.projects) ? parsedResumeSections.projects.slice(0, 6) : []);
             };
 
             const addSharedJobFacts = () => {
@@ -2048,12 +2387,21 @@
                     assign('city', profile.city);
                     assign('state', profile.state);
                     break;
+                case 'educationDegree':
+                    assign('primaryEducation', profile.primaryEducation);
+                    assign('educationHighlights', profile.educationHighlights);
+                    break;
+                case 'educationSchool':
+                    assign('primaryEducation', profile.primaryEducation);
+                    assign('educationHighlights', profile.educationHighlights);
+                    break;
                 case 'phoneCountryCode':
                     assign('phoneCountryCode', profile.phoneCountryCode);
                     assign('location', profile.location);
                     break;
                 default:
                     addSharedJobFacts();
+                    addResumeFacts();
                     assign('gender', profile.gender);
                     assign('transgender', profile.transgender);
                     assign('sexualOrientation', this.getStructuredChoiceValues('sexualOrientation', profile.sexualOrientation));
@@ -2281,6 +2629,14 @@
         },
 
         getPreferredProfileAnswer(fieldType) {
+            if (fieldType === 'educationDegree') {
+                return this.getEducationDegreeText() || null;
+            }
+
+            if (fieldType === 'educationSchool') {
+                return this.getEducationSchoolText() || null;
+            }
+
             return this.getStructuredChoiceConfig(fieldType)?.value || null;
         },
 
@@ -2338,6 +2694,11 @@
         findPreferredChoiceOption(options, fieldType) {
             if (!fieldType || !Array.isArray(options) || options.length === 0) {
                 return null;
+            }
+
+            const educationOption = this.findEducationChoiceOption(options, fieldType);
+            if (educationOption) {
+                return educationOption;
             }
 
             const config = this.getStructuredChoiceConfig(fieldType);
@@ -2423,6 +2784,11 @@
         },
 
         inferStructuredChoiceFieldType(...texts) {
+            const educationFieldType = this.inferEducationChoiceFieldType(...texts);
+            if (educationFieldType) {
+                return educationFieldType;
+            }
+
             const combinedText = texts
                 .filter(Boolean)
                 .map(text => (text || '').trim())
@@ -3313,6 +3679,13 @@
                     label: context.label,
                     helperText: context.helperText,
                     sectionContext: context.sectionContext,
+                    detectedFieldType: this.inferEducationChoiceFieldType(
+                        context.question,
+                        context.label,
+                        context.helperText,
+                        context.sectionContext,
+                        options
+                    ),
                     options
                 });
             }
@@ -3380,19 +3753,46 @@
         },
 
         async resolveCustomComboboxField(control, fieldTypeOverride = null) {
-            const initialFieldType = fieldTypeOverride || this.identifyCustomChoiceFieldType(control);
+            const choiceContext = this.getChoiceFieldContext(control);
+            const contextEducationFieldType = this.inferEducationChoiceFieldType(
+                choiceContext.question,
+                choiceContext.label,
+                choiceContext.helperText,
+                choiceContext.sectionContext
+            );
+            const initialFieldType = fieldTypeOverride || this.identifyCustomChoiceFieldType(control) || contextEducationFieldType;
+
+            if (initialFieldType === 'educationSchool') {
+                const schoolResolved = await this.resolveEducationSchoolComboboxField(control, []);
+                if (schoolResolved) {
+                    return schoolResolved;
+                }
+            }
+
             const rawOptions = await this.getComboboxOptions(control);
-            const fieldType = initialFieldType || this.inferComboboxFieldTypeFromOptions(control, rawOptions);
+            const fieldType = contextEducationFieldType || this.inferEducationChoiceFieldType(
+                choiceContext.question,
+                choiceContext.label,
+                choiceContext.helperText,
+                choiceContext.sectionContext,
+                rawOptions
+            ) || initialFieldType || this.inferComboboxFieldTypeFromOptions(control, rawOptions);
             const config = fieldType ? this.getStructuredChoiceConfig(fieldType) : null;
             const profileOptions = this.filterComboboxOptionsForFieldType(rawOptions, fieldType);
             const options = profileOptions.length > 0 ? profileOptions : rawOptions;
-            const choiceContext = this.getChoiceFieldContext(control);
             const isAcknowledgement = this.isAcknowledgementQuestion(choiceContext.question, choiceContext.sectionContext, choiceContext.label);
 
             if (fieldType === 'city' || fieldType === 'location') {
                 const locationResolved = await this.resolveLocationComboboxField(control, fieldType, rawOptions);
                 if (locationResolved) {
                     return locationResolved;
+                }
+            }
+
+            if (fieldType === 'educationSchool') {
+                const schoolResolved = await this.resolveEducationSchoolComboboxField(control, rawOptions);
+                if (schoolResolved) {
+                    return schoolResolved;
                 }
             }
 
@@ -3421,6 +3821,15 @@
                         source: 'rule'
                     };
                 }
+            }
+
+            const educationOption = this.findEducationChoiceOption(options, fieldType);
+            if (educationOption && await this.applyCustomComboboxSelection(control, educationOption, fieldType)) {
+                return {
+                    type: fieldType,
+                    text: educationOption.text,
+                    source: 'profile'
+                };
             }
 
             if (config?.value) {
@@ -3465,6 +3874,18 @@
 
             if (fieldType === 'location') {
                 return this.formatLocation() || this.userData?.city || '';
+            }
+
+            return '';
+        },
+
+        getEducationComboboxSearchValue(fieldType) {
+            if (fieldType === 'educationSchool') {
+                return this.getEducationSchoolText();
+            }
+
+            if (fieldType === 'educationDegree') {
+                return this.getEducationDegreeText();
             }
 
             return '';
@@ -3516,6 +3937,85 @@
 
             return {
                 type: fieldType,
+                text: matchedOption.text,
+                source: 'profile'
+            };
+        },
+
+        async resolveEducationSchoolComboboxField(control, existingOptions = []) {
+            const searchValue = this.getEducationComboboxSearchValue('educationSchool');
+            if (!searchValue) {
+                return null;
+            }
+
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const input = root.querySelector(`input.${GREENHOUSE_SELECT_CLASSES.input}, .${GREENHOUSE_SELECT_CLASSES.input} input, input[type="text"], input[type="search"]`);
+            if (!input) {
+                const fallbackOption = this.findEducationChoiceOption(existingOptions, 'educationSchool');
+                if (!fallbackOption || !await this.applyCustomComboboxSelection(control, fallbackOption, 'educationSchool')) {
+                    return null;
+                }
+
+                return {
+                    type: 'educationSchool',
+                    text: fallbackOption.text,
+                    source: 'profile'
+                };
+            }
+
+            this.setComboboxSearchValue(root, searchValue);
+
+            const schoolState = await this.waitForComboboxState(root, {
+                timeoutMs: 1500,
+                intervalMs: 150,
+                minWaitMs: 1500
+            });
+            const initialOptions = schoolState.options.map(option => ({
+                text: (option.textContent || '').replace(/\s+/g, ' ').trim(),
+                element: option
+            })).filter(option => option.text && !this.isPlaceholderOption(option.text));
+            let matchedOption = this.findEducationSchoolOption(initialOptions);
+
+            if (!matchedOption) {
+                this.setComboboxSearchValue(root, '');
+                await new Promise(resolve => setTimeout(resolve, 80));
+                await this.openCustomCombobox(root);
+                this.setComboboxSearchValue(root, 'Other');
+
+                const otherState = await this.waitForComboboxState(root, {
+                    timeoutMs: 1500,
+                    intervalMs: 150,
+                    minWaitMs: 1500
+                });
+                const otherOptions = otherState.options.map(option => ({
+                    text: (option.textContent || '').replace(/\s+/g, ' ').trim(),
+                    element: option
+                })).filter(option => option.text && !this.isPlaceholderOption(option.text));
+                matchedOption = this.findStrictOtherChoiceOption(otherOptions);
+            }
+
+            if (!matchedOption) {
+                const options = initialOptions.length > 0 ? initialOptions : existingOptions;
+                matchedOption = this.findStrictOtherChoiceOption(options);
+            }
+
+            if (!matchedOption) {
+                this.recordDebugEvent('custom-combobox', 'skipped', {
+                    fieldType: 'educationSchool',
+                    element: control,
+                    reason: 'school-search-returned-no-matches-and-other-not-found',
+                    value: searchValue,
+                    source: 'profile'
+                });
+                return null;
+            }
+
+            if (!await this.applyCustomComboboxSelection(root, matchedOption, 'educationSchool')) {
+                return null;
+            }
+
+            return {
+                type: 'educationSchool',
                 text: matchedOption.text,
                 source: 'profile'
             };
@@ -4439,7 +4939,7 @@
             }
         },
 
-        findVisibleComboboxOptions(control) {
+        getScopedVisibleComboboxListboxes(control) {
             const root = this.resolveCustomComboboxControl(control) || control;
             const listboxIds = [
                 root.getAttribute('aria-controls'),
@@ -4451,12 +4951,10 @@
             const visibleListboxes = Array.from(document.querySelectorAll(
                 `[role="listbox"], [data-reach-listbox-popover], [class*="listbox"], [class*="menu"], .${GREENHOUSE_SELECT_CLASSES.menu}`
             ));
-            const listboxes = [...new Set([...explicitListboxes, ...visibleListboxes])].filter(listbox => {
-                return this.isElementVisiblyRendered(listbox);
-            });
+            const listboxes = [...new Set([...explicitListboxes, ...visibleListboxes])].filter(listbox => this.isElementVisiblyRendered(listbox));
 
             const rootRect = root.getBoundingClientRect();
-            const scopedListboxes = listboxes
+            return listboxes
                 .map(listbox => {
                     const rect = listbox.getBoundingClientRect();
                     const horizontalDistance = Math.abs(rect.left - rootRect.left);
@@ -4476,6 +4974,83 @@
                 .sort((left, right) => left.score - right.score)
                 .slice(0, 2)
                 .map(item => item.listbox);
+        },
+
+        getVisibleComboboxEmptyState(control) {
+            const emptyStateSignals = [
+                'no matches found',
+                'no match found',
+                'no results found',
+                'no results',
+                'no options'
+            ];
+
+            for (const listbox of this.getScopedVisibleComboboxListboxes(control)) {
+                const nodes = [listbox, ...Array.from(listbox.querySelectorAll('*'))];
+                for (const node of nodes) {
+                    if (!this.isElementVisiblyRendered(node)) {
+                        continue;
+                    }
+
+                    const text = (node.textContent || '').replace(/\s+/g, ' ').trim();
+                    const normalizedText = this.normalizeText(text);
+                    if (!normalizedText) {
+                        continue;
+                    }
+
+                    if (emptyStateSignals.some(signal => normalizedText.includes(signal))) {
+                        return text;
+                    }
+                }
+            }
+
+            return '';
+        },
+
+        async waitForComboboxState(control, options = {}) {
+            const timeoutMs = options.timeoutMs || 1500;
+            const intervalMs = options.intervalMs || 150;
+            const minWaitMs = options.minWaitMs || 0;
+            const startedAt = Date.now();
+
+            while (Date.now() - startedAt < timeoutMs) {
+                const visibleOptions = this.findVisibleComboboxOptions(control);
+                if (visibleOptions.length > 0) {
+                    return { options: visibleOptions, emptyStateText: '' };
+                }
+
+                const emptyStateText = this.getVisibleComboboxEmptyState(control);
+                if (emptyStateText && (Date.now() - startedAt) >= minWaitMs) {
+                    return { options: [], emptyStateText };
+                }
+
+                await new Promise(resolve => setTimeout(resolve, intervalMs));
+            }
+
+            return {
+                options: this.findVisibleComboboxOptions(control),
+                emptyStateText: this.getVisibleComboboxEmptyState(control)
+            };
+        },
+
+        setComboboxSearchValue(control, value) {
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const input = root.querySelector(`input.${GREENHOUSE_SELECT_CLASSES.input}, .${GREENHOUSE_SELECT_CLASSES.input} input, input[type="text"], input[type="search"]`);
+            if (!input) {
+                return null;
+            }
+
+            input.focus?.();
+            this.setElementValue(input, value);
+            this.dispatchValueEvents(input, { emitFocus: false, emitBlur: false });
+            input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+            input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true, key: 'ArrowDown', code: 'ArrowDown' }));
+            return input;
+        },
+
+        findVisibleComboboxOptions(control) {
+            const root = this.resolveCustomComboboxControl(control) || control;
+            const scopedListboxes = this.getScopedVisibleComboboxListboxes(root);
 
             const optionSelector = `[role="option"], li, button, [data-option], [data-value], .${GREENHOUSE_SELECT_CLASSES.option}`;
             const options = [];
@@ -4514,6 +5089,7 @@
                     candidate.label,
                     candidate.helperText,
                     candidate.sectionContext,
+                    candidate.options,
                     candidate.element?.name,
                     candidate.element?.id,
                     candidate.element?.getAttribute?.('aria-label') || '',
@@ -4674,7 +5250,13 @@
                     label: context.label,
                     helperText: context.helperText,
                     sectionContext: context.sectionContext,
-                    detectedFieldType: FieldDetector.identifyFieldType(select)
+                    detectedFieldType: this.inferEducationChoiceFieldType(
+                        context.question,
+                        context.label,
+                        context.helperText,
+                        context.sectionContext,
+                        options
+                    ) || FieldDetector.identifyFieldType(select)
                         || this.inferComboboxFieldTypeFromOptions(select, options)
                         || this.inferStructuredChoiceFieldType(context.question, context.label, context.sectionContext),
                     options,
@@ -6129,8 +6711,49 @@
                 }
             }
 
+            this.fillEducationSelects();
             this.fillBinarySelects();
             this.fillSingleOptionSelects();
+        },
+
+        fillEducationSelects() {
+            for (const select of document.querySelectorAll('select')) {
+                if (select.value && select.selectedIndex > 0) continue;
+                if (!this.isElementAllowed(select) || select.disabled) continue;
+
+                const context = this.getChoiceFieldContext(select);
+                const options = this.getSelectableOptions(select);
+                const fieldType = this.inferEducationChoiceFieldType(
+                    context.question,
+                    context.label,
+                    context.helperText,
+                    context.sectionContext,
+                    options,
+                    select.name,
+                    select.id,
+                    select.getAttribute('aria-label') || ''
+                );
+
+                if (!fieldType) {
+                    continue;
+                }
+
+                const option = this.findEducationChoiceOption(options, fieldType);
+                if (!option) {
+                    this.recordDebugEvent('select', 'skipped', {
+                        fieldType,
+                        element: select,
+                        reason: 'no-education-option-match',
+                        source: 'profile'
+                    });
+                    continue;
+                }
+
+                if (this.applySelectOption(select, option, { fieldType, source: 'profile' })) {
+                    this.filledFields.push({ type: fieldType, element: select });
+                    this.highlightField(select, true);
+                }
+            }
         },
 
         fillSingleOptionSelects() {

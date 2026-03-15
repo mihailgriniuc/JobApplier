@@ -446,6 +446,19 @@ document.addEventListener('DOMContentLoaded', async () => {
         return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
     }
 
+    async function parseStoredResume(force = true) {
+        const response = await chrome.runtime.sendMessage({
+            action: 'parseStoredResume',
+            force
+        });
+
+        if (!response?.success) {
+            throw new Error(response?.error || 'Failed to extract structured resume data.');
+        }
+
+        return response.parsedResume || null;
+    }
+
     // Save user data
     saveBtn.addEventListener('click', async () => {
         try {
@@ -495,12 +508,23 @@ document.addEventListener('DOMContentLoaded', async () => {
 
             await Storage.saveUserData(validation.normalizedData);
 
+            let resumeParseWarning = '';
             if (resumeFile) {
                 await Storage.saveResume(resumeFile);
+
+                try {
+                    await parseStoredResume(true);
+                } catch (error) {
+                    resumeParseWarning = error.message || 'Failed to extract structured resume data.';
+                }
             }
 
             showScreen('main');
             await loadUserGreeting();
+
+            if (resumeParseWarning) {
+                alert(`Your resume was saved, but structured extraction failed: ${resumeParseWarning}`);
+            }
         } catch (error) {
             console.error('Failed to save data:', error);
             alert('Failed to save data. Please try again.');
