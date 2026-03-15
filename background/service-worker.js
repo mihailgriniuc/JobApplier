@@ -28,6 +28,14 @@ const GITHUB_REPO_URL = `https://github.com/${GITHUB_REPO_OWNER}/${GITHUB_REPO_N
 const UPDATE_CHECK_INTERVAL_MS = 1000 * 60 * 60 * 6;
 let localAiConfigCache = null;
 
+function canUseExtensionRuntimeUrl() {
+    return Boolean(
+        typeof chrome !== 'undefined' &&
+        chrome?.runtime?.id &&
+        typeof chrome.runtime.getURL === 'function'
+    );
+}
+
 function normalizeVersion(version) {
     return typeof version === 'string' ? version.trim().replace(/^v/i, '') : '';
 }
@@ -176,8 +184,19 @@ async function loadLocalAiConfig() {
         return localAiConfigCache;
     }
 
+    if (!canUseExtensionRuntimeUrl()) {
+        localAiConfigCache = {};
+        return localAiConfigCache;
+    }
+
     try {
-        const response = await fetch(chrome.runtime.getURL('local/ai-config.local.json'), {
+        const configUrl = chrome.runtime.getURL('local/ai-config.local.json');
+        if (!configUrl || configUrl.startsWith('chrome-extension://invalid/')) {
+            localAiConfigCache = {};
+            return localAiConfigCache;
+        }
+
+        const response = await fetch(configUrl, {
             cache: 'no-store'
         });
 
@@ -217,6 +236,7 @@ async function getStoredSettings() {
 function buildAiMessages(payload, aiSettings) {
     const maxCharacters = Math.max(80, Math.min(Number(aiSettings.maxCharacters) || 320, 1200));
     const userProfile = JSON.stringify(payload.userProfile || {}, null, 2);
+    const relevantProfileContext = JSON.stringify(payload.relevantProfileContext || {}, null, 2);
     const choiceOptions = Array.isArray(payload.choiceOptions) ? payload.choiceOptions.filter(Boolean) : [];
     const isChoicePrompt = choiceOptions.length > 0;
     const resumeContext = (payload.resumeContext || '').trim();
@@ -231,7 +251,7 @@ function buildAiMessages(payload, aiSettings) {
                 'If structured resume context is provided, prioritize those facts and phrasing over generic filler.',
                 'Answer only the specific question for the specific field shown in the prompt.',
                 'If helper text narrows the answer, follow it.',
-                isChoicePrompt ? 'When options are provided, choose the single option that best matches the user profile for that field. Ignore unrelated profile details. For example, do not use location for ethnicity, disability, sponsorship, gender, veteran, or similar questions. Return exactly one option label from the list and do not explain your choice.' : '',
+                isChoicePrompt ? 'When options are provided, act like an autofill copilot for this single field. Prefer the relevant profile facts for this field over the full profile, ignore unrelated profile details, and choose the single option label that best matches the user. Return exactly one option label from the list and do not explain your choice.' : '',
                 isChoicePrompt && payload.preferredProfileAnswer ? `The saved profile answer for this field is: ${payload.preferredProfileAnswer}. You must choose the option that matches this saved answer and never choose the opposite meaning.` : '',
                 'Answer in first person, keep it professional but natural, and tailor it to the job posting when relevant.',
                 `Return plain text only and keep the answer under ${maxCharacters} characters unless the question explicitly asks for more detail.`
@@ -248,6 +268,7 @@ function buildAiMessages(payload, aiSettings) {
                 payload.preferredProfileAnswer ? `Saved profile answer: ${payload.preferredProfileAnswer}` : '',
                 payload.fieldHtmlType ? `Field type: ${payload.fieldHtmlType}` : '',
                 isChoicePrompt ? `Available options:\n${choiceOptions.map((option, index) => `${index + 1}. ${option}`).join('\n')}` : '',
+                isChoicePrompt ? `Relevant profile facts for this field:\n${relevantProfileContext}` : '',
                 `Page title: ${payload.pageTitle || ''}`,
                 'User profile:',
                 userProfile,
@@ -257,6 +278,102 @@ function buildAiMessages(payload, aiSettings) {
             ].filter(Boolean).join('\n\n')
         }
     ];
+}
+
+function buildAiBatchMessages(payloads, aiSettings) {
+    const maxCharacters = Math.max(80, Math.min(Number(aiSettings.maxCharacters) || 320, 1200));
+    const firstPayload = payloads[0] || {};
+    const userProfile = JSON.stringify(firstPayload.userProfile || {}, null, 2);
+    const resumeContext = (firstPayload.resumeContext || '').trim();
+    const sharedContext = [
+        `Page title: ${firstPayload.pageTitle || ''}`,
+        'User profile:',
+        userProfile,
+        resumeContext ? `Structured resume context:\n${resumeContext}` : '',
+        aiSettings.extraContext ? `Additional resume context: ${aiSettings.extraContext}` : '',
+        firstPayload.jobPostingText ? `Job posting excerpt:\n${firstPayload.jobPostingText}` : ''
+    ].filter(Boolean).join('\n\n');
+
+    const tasks = payloads.map((payload, index) => {
+        const choiceOptions = Array.isArray(payload.choiceOptions) ? payload.choiceOptions.filter(Boolean) : [];
+        const isChoicePrompt = choiceOptions.length > 0;
+
+        return [
+            `Task ${index}:`,
+            `Question: ${payload.question || ''}`,
+            `Field label/context: ${payload.fieldLabel || ''}`,
+            payload.helperText ? `Helper text: ${payload.helperText}` : '',
+            payload.sectionContext ? `Nearby section text: ${payload.sectionContext}` : '',
+            payload.detectedFieldType ? `Detected field type: ${payload.detectedFieldType}` : '',
+            payload.preferredProfileAnswer ? `Saved profile answer: ${payload.preferredProfileAnswer}` : '',
+            payload.fieldHtmlType ? `Field type: ${payload.fieldHtmlType}` : '',
+            isChoicePrompt ? `Relevant profile facts for this field:\n${JSON.stringify(payload.relevantProfileContext || {}, null, 2)}` : '',
+            isChoicePrompt ? `Available options:\n${choiceOptions.map((option, optionIndex) => `${optionIndex + 1}. ${option}`).join('\n')}` : ''
+        ].filter(Boolean).join('\n');
+    }).join('\n\n');
+
+    return [
+        {
+            role: 'system',
+            content: [
+                'You write concise, job-application answers for screening questions.',
+                'Use only the provided profile, job posting, and extra context.',
+                'Do not invent employers, years, certifications, tools, or achievements not present in the context.',
+                'If a task includes options, act like an autofill copilot for that single field. Prefer the relevant profile facts for that field over the full profile, choose the single option label that best matches the user, and never return an opposite meaning to the saved profile answer.',
+                'Return strict JSON only with this shape: {"answers":[{"index":0,"answer":"..."}]}.',
+                'Include one answer for every task index in order.',
+                `Each answer must be plain text and under ${maxCharacters} characters unless the task explicitly asks for more detail.`
+            ].join(' ')
+        },
+        {
+            role: 'user',
+            content: [
+                'Shared context:',
+                sharedContext,
+                'Tasks:',
+                tasks
+            ].filter(Boolean).join('\n\n')
+        }
+    ];
+}
+
+function parseBatchAnswerJson(rawText) {
+    const responseText = typeof rawText === 'string' ? rawText.trim() : '';
+    if (!responseText) {
+        throw new Error('Mistral returned an empty batch response.');
+    }
+
+    const cleaned = responseText
+        .replace(/^```json\s*/i, '')
+        .replace(/^```\s*/i, '')
+        .replace(/```$/i, '')
+        .trim();
+
+    const candidateTexts = [cleaned];
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace >= 0 && lastBrace > firstBrace) {
+        candidateTexts.push(cleaned.slice(firstBrace, lastBrace + 1));
+    }
+
+    for (const candidateText of candidateTexts) {
+        try {
+            const parsed = JSON.parse(candidateText);
+            const answers = Array.isArray(parsed) ? parsed : parsed?.answers;
+            if (!Array.isArray(answers)) {
+                continue;
+            }
+
+            return answers.map((item, index) => ({
+                index: Number.isFinite(Number(item?.index)) ? Number(item.index) : index,
+                answer: typeof item?.answer === 'string' ? item.answer.trim() : ''
+            }));
+        } catch (error) {
+            continue;
+        }
+    }
+
+    throw new Error('Could not parse batched AI response as JSON.');
 }
 
 async function generateMistralAnswer(payload) {
@@ -300,6 +417,68 @@ async function generateMistralAnswer(payload) {
 
     return {
         answer,
+        model: aiSettings.model || 'mistral-small-latest'
+    };
+}
+
+async function generateMistralAnswerBatch(payloads) {
+    const requests = Array.isArray(payloads) ? payloads.filter(payload => payload && typeof payload === 'object') : [];
+    if (requests.length === 0) {
+        throw new Error('No AI batch payloads were provided.');
+    }
+
+    if (requests.length === 1) {
+        const singleResult = await generateMistralAnswer(requests[0]);
+        return {
+            answers: [{ success: true, ...singleResult }],
+            model: singleResult.model
+        };
+    }
+
+    const settings = await getStoredSettings();
+    const aiSettings = settings.aiAssist || getDefaultAiAssistSettings();
+
+    if (!aiSettings.enabled) {
+        throw new Error('AI assistance is disabled in settings.');
+    }
+
+    if (!aiSettings.apiKey) {
+        throw new Error('Missing Mistral API key. Add it in Settings > AI Assistance.');
+    }
+
+    const response = await fetch(MISTRAL_API_URL, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Authorization: `Bearer ${aiSettings.apiKey}`
+        },
+        body: JSON.stringify({
+            model: aiSettings.model || 'mistral-small-latest',
+            temperature: 0.2,
+            top_p: 0.9,
+            messages: buildAiBatchMessages(requests, aiSettings)
+        })
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        const apiMessage = data?.message || data?.error?.message || `Mistral request failed with ${response.status}`;
+        throw new Error(apiMessage);
+    }
+
+    const rawContent = data?.choices?.[0]?.message?.content?.trim();
+    const parsedAnswers = parseBatchAnswerJson(rawContent);
+    const answerMap = new Map(parsedAnswers.map(item => [item.index, item.answer]));
+
+    return {
+        answers: requests.map((_, index) => {
+            const answer = answerMap.get(index) || '';
+            return answer
+                ? { success: true, answer, model: aiSettings.model || 'mistral-small-latest' }
+                : { success: false, error: `Missing answer for batch item ${index}` };
+        }),
         model: aiSettings.model || 'mistral-small-latest'
     };
 }
@@ -469,6 +648,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 sendResponse({
                     success: false,
                     error: error.message || 'Failed to generate AI answer'
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (message.action === 'getLocalAiConfig') {
+        (async () => {
+            try {
+                const aiConfig = await loadLocalAiConfig();
+                sendResponse({ success: true, aiConfig });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error.message || 'Failed to load local AI config',
+                    aiConfig: {}
+                });
+            }
+        })();
+        return true;
+    }
+
+    if (message.action === 'generateAiAnswerBatch') {
+        (async () => {
+            try {
+                const result = await generateMistralAnswerBatch(message.payloads || []);
+                sendResponse({ success: true, ...result });
+            } catch (error) {
+                sendResponse({
+                    success: false,
+                    error: error.message || 'Failed to generate batched AI answers'
                 });
             }
         })();

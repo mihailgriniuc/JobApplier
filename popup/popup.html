@@ -272,21 +272,37 @@
         </div>
 
         <div class="form-group">
-          <label for="sexualOrientation">Sexual Orientation</label>
-          <select id="sexualOrientation">
-            <option value="">Select...</option>
-            <option value="asexual">Asexual</option>
-            <option value="bisexual">Bisexual</option>
-            <option value="gay">Gay</option>
-            <option value="no_answer">I don't wish to answer</option>
-            <option value="lesbian">Lesbian</option>
-            <option value="lgbtqia">LGBTQIA+ identifying</option>
-            <option value="pansexual">Pansexual</option>
-            <option value="self_describe">Prefer to self-describe as</option>
-            <option value="queer">Queer</option>
-            <option value="questioning">Questioning or unsure</option>
-            <option value="straight">Straight (heterosexual)</option>
-          </select>
+          <label>How would you describe your sexual orientation? (mark all that apply)</label>
+          <div class="checkbox-group" data-field="sexualOrientation">
+            <label class="checkbox-option">
+              <input type="checkbox" name="sexualOrientation" value="asexual">
+              <span>Asexual</span>
+            </label>
+            <label class="checkbox-option">
+              <input type="checkbox" name="sexualOrientation" value="bisexual,pansexual">
+              <span>Bisexual and/or pansexual</span>
+            </label>
+            <label class="checkbox-option">
+              <input type="checkbox" name="sexualOrientation" value="gay">
+              <span>Gay</span>
+            </label>
+            <label class="checkbox-option">
+              <input type="checkbox" name="sexualOrientation" value="straight">
+              <span>Heterosexual / Straight</span>
+            </label>
+            <label class="checkbox-option">
+              <input type="checkbox" name="sexualOrientation" value="lesbian">
+              <span>Lesbian</span>
+            </label>
+            <label class="checkbox-option">
+              <input type="checkbox" name="sexualOrientation" value="queer">
+              <span>Queer</span>
+            </label>
+            <label class="checkbox-option">
+              <input type="checkbox" name="sexualOrientation" value="no_answer">
+              <span>I don't wish to answer</span>
+            </label>
+          </div>
         </div>
 
         <div class="form-group">

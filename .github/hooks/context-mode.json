@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "type": "command",
+        "command": "/Users/grini/.local/bin/context-mode hook vscode-copilot pretooluse"
+      }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "/Users/grini/.local/bin/context-mode hook vscode-copilot posttooluse"
+      }
+    ],
+    "PreCompact": [
+      {
+        "type": "command",
+        "command": "/Users/grini/.local/bin/context-mode hook vscode-copilot precompact"
+      }
+    ],
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "/Users/grini/.local/bin/context-mode hook vscode-copilot sessionstart"
+      }
+    ]
+  }
+}

@@ -26,6 +26,23 @@ const PARSED_RESUME_SECTION_KEYS = [
 
 let localAiConfigCache = null;
 
+function canUseExtensionRuntimeUrl() {
+    return Boolean(
+        typeof chrome !== 'undefined' &&
+        chrome?.runtime?.id &&
+        typeof chrome.runtime.getURL === 'function'
+    );
+}
+
+function isExtensionPageContext() {
+    return Boolean(
+        typeof location !== 'undefined' &&
+        location.protocol === 'chrome-extension:' &&
+        chrome?.runtime?.id &&
+        location.origin === `chrome-extension://${chrome.runtime.id}`
+    );
+}
+
 const DEFAULT_SETTINGS = {
     autoDetect: true,
     showIndicators: true,
@@ -167,8 +184,27 @@ async function loadLocalAiConfig() {
         return localAiConfigCache;
     }
 
+    if (!canUseExtensionRuntimeUrl()) {
+        localAiConfigCache = {};
+        return localAiConfigCache;
+    }
+
     try {
-        const response = await fetch(chrome.runtime.getURL('local/ai-config.local.json'), {
+        if (!isExtensionPageContext() && typeof chrome.runtime.sendMessage === 'function') {
+            const response = await chrome.runtime.sendMessage({ action: 'getLocalAiConfig' });
+            localAiConfigCache = response?.success && response.aiConfig && typeof response.aiConfig === 'object'
+                ? response.aiConfig
+                : {};
+            return localAiConfigCache;
+        }
+
+        const configUrl = chrome.runtime.getURL('local/ai-config.local.json');
+        if (!configUrl || configUrl.startsWith('chrome-extension://invalid/')) {
+            localAiConfigCache = {};
+            return localAiConfigCache;
+        }
+
+        const response = await fetch(configUrl, {
             cache: 'no-store'
         });
 

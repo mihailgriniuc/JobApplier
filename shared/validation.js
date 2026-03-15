@@ -3,6 +3,67 @@
  */
 
 const Validation = {
+    normalizeDelimitedValues(value) {
+        if (Array.isArray(value)) {
+            return value
+                .flatMap(item => this.normalizeDelimitedValues(item))
+                .filter(Boolean);
+        }
+
+        if (typeof value !== 'string') {
+            return [];
+        }
+
+        return value
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+    },
+
+    getSexualOrientationValues(value) {
+        const values = [];
+        const seen = new Set();
+
+        this.normalizeDelimitedValues(value).forEach(item => {
+            const normalizedItem = item
+                .toLowerCase()
+                .replace(/\s+/g, ' ')
+                .trim();
+
+            let mappedValues = [item.trim()];
+
+            if ((normalizedItem.includes('bisexual') && normalizedItem.includes('pansexual')) || normalizedItem === 'bisexual and/or pansexual') {
+                mappedValues = ['bisexual', 'pansexual'];
+            } else if (normalizedItem.includes('heterosexual') || normalizedItem === 'straight' || normalizedItem === 'straight (heterosexual)') {
+                mappedValues = ['straight'];
+            } else if (
+                normalizedItem === 'i don\'t wish to answer' ||
+                normalizedItem === 'i don t wish to answer' ||
+                normalizedItem === 'i do not wish to answer' ||
+                normalizedItem.includes('prefer not')
+            ) {
+                mappedValues = ['no_answer'];
+            } else if (normalizedItem === 'asexual' || normalizedItem === 'bisexual' || normalizedItem === 'pansexual' || normalizedItem === 'gay' || normalizedItem === 'lesbian' || normalizedItem === 'queer' || normalizedItem === 'no_answer') {
+                mappedValues = [normalizedItem];
+            }
+
+            mappedValues.forEach(mappedValue => {
+                if (!mappedValue || seen.has(mappedValue)) {
+                    return;
+                }
+
+                seen.add(mappedValue);
+                values.push(mappedValue);
+            });
+        });
+
+        return values;
+    },
+
+    normalizeSexualOrientationValue(value) {
+        return this.getSexualOrientationValues(value).join(', ');
+    },
+
     normalizeUserData(data) {
         const source = data || {};
 
@@ -23,13 +84,54 @@ const Validation = {
             over18: (source.over18 || '').trim(),
             formerEmployee: (source.formerEmployee || '').trim(),
             transgender: (source.transgender || '').trim(),
-            sexualOrientation: (source.sexualOrientation || '').trim(),
+            sexualOrientation: this.normalizeSexualOrientationValue(source.sexualOrientation),
             pronouns: (source.pronouns || '').trim(),
             gender: (source.gender || '').trim(),
             race: (source.race || '').trim(),
             veteran: (source.veteran || '').trim(),
             disability: (source.disability || '').trim(),
             hispanicLatino: (source.hispanicLatino || '').trim()
+        };
+    },
+
+    normalizeBinaryChoice(value) {
+        const normalized = (value || '').trim().toLowerCase();
+
+        if (!normalized) {
+            return '';
+        }
+
+        if (['yes', 'true', 'y'].includes(normalized)) {
+            return 'yes';
+        }
+
+        if (['no', 'false', 'n'].includes(normalized)) {
+            return 'no';
+        }
+
+        return normalized;
+    },
+
+    validateAnswerCoherence(data) {
+        const normalizedData = this.normalizeUserData(data);
+        const errors = [];
+        const warnings = [];
+        const workAuth = this.normalizeBinaryChoice(normalizedData.workAuth);
+        const sponsorship = this.normalizeBinaryChoice(normalizedData.sponsorship);
+
+        if (workAuth === 'no' && sponsorship === 'no') {
+            errors.push('Work authorization and sponsorship answers conflict: if you are not authorized to work, sponsorship cannot also be set to No');
+        }
+
+        if (workAuth === 'yes' && sponsorship === 'yes') {
+            warnings.push('Work authorization is set to Yes while sponsorship is also Yes. This can be valid for temporary authorization, but verify it matches your situation');
+        }
+
+        return {
+            valid: errors.length === 0,
+            errors,
+            warnings,
+            normalizedData
         };
     },
 
@@ -112,6 +214,7 @@ const Validation = {
     validateUserData(data) {
         const normalizedData = this.normalizeUserData(data);
         const errors = [];
+        const warnings = [];
 
         // Required fields
         if (!this.isNotEmpty(normalizedData.fullName)) {
@@ -133,9 +236,14 @@ const Validation = {
             errors.push('Please enter a valid phone number');
         }
 
+        const coherence = this.validateAnswerCoherence(normalizedData);
+        errors.push(...coherence.errors);
+        warnings.push(...coherence.warnings);
+
         return {
             valid: errors.length === 0,
             errors,
+            warnings,
             normalizedData
         };
     },

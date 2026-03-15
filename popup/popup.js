@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const fileName = document.getElementById('fileName');
     const fileSize = document.getElementById('fileSize');
     const removeFileBtn = document.getElementById('removeFile');
+    const sexualOrientationInputs = Array.from(document.querySelectorAll('input[name="sexualOrientation"]'));
 
     // Action buttons
     const saveBtn = document.getElementById('saveBtn');
@@ -42,6 +43,81 @@ document.addEventListener('DOMContentLoaded', async () => {
     let currentStep = 1;
     let resumeFile = null;
     let latestDownloadUrl = 'https://github.com/mihailgriniuc/JobApplier';
+    let sexualOrientationTouched = false;
+
+    function getSexualOrientationOptionValues(value) {
+        return (value || '')
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+
+    function setSexualOrientationSelections(value) {
+        const selectedValues = new Set(Validation.getSexualOrientationValues(value));
+
+        sexualOrientationInputs.forEach(input => {
+            const optionValues = getSexualOrientationOptionValues(input.value);
+            input.checked = optionValues.some(optionValue => selectedValues.has(optionValue));
+        });
+
+        sexualOrientationTouched = false;
+    }
+
+    function getSexualOrientationSelectionValue(fallbackValue = '') {
+        const selectedValues = [];
+        const seen = new Set();
+
+        sexualOrientationInputs.forEach(input => {
+            if (!input.checked) {
+                return;
+            }
+
+            getSexualOrientationOptionValues(input.value).forEach(optionValue => {
+                if (seen.has(optionValue)) {
+                    return;
+                }
+
+                seen.add(optionValue);
+                selectedValues.push(optionValue);
+            });
+        });
+
+        if (selectedValues.length > 0) {
+            return Validation.normalizeSexualOrientationValue(selectedValues);
+        }
+
+        return sexualOrientationTouched ? '' : Validation.normalizeSexualOrientationValue(fallbackValue);
+    }
+
+    function handleSexualOrientationChange(event) {
+        sexualOrientationTouched = true;
+
+        const currentValues = getSexualOrientationOptionValues(event.target.value);
+        const includesNoAnswer = currentValues.includes('no_answer');
+
+        if (!event.target.checked) {
+            return;
+        }
+
+        if (includesNoAnswer) {
+            sexualOrientationInputs.forEach(input => {
+                if (input !== event.target) {
+                    input.checked = false;
+                }
+            });
+            return;
+        }
+
+        sexualOrientationInputs.forEach(input => {
+            if (input === event.target) {
+                return;
+            }
+
+            if (getSexualOrientationOptionValues(input.value).includes('no_answer')) {
+                input.checked = false;
+            }
+        });
+    }
 
     // Initialize
     await initialize();
@@ -213,6 +289,10 @@ document.addEventListener('DOMContentLoaded', async () => {
             const prevStep = parseInt(btn.dataset.prev);
             updateSteps(prevStep);
         });
+    });
+
+    sexualOrientationInputs.forEach(input => {
+        input.addEventListener('change', handleSexualOrientationChange);
     });
 
     function validateCurrentStep() {
@@ -392,7 +472,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                 formerEmployee: document.querySelector('input[name="formerEmployee"]:checked')?.value || '',
                 startAvailability: document.querySelector('input[name="startAvailability"]:checked')?.value || '',
                 transgender: document.querySelector('input[name="transgender"]:checked')?.value || '',
-                sexualOrientation: document.getElementById('sexualOrientation').value,
+                sexualOrientation: getSexualOrientationSelectionValue(),
                 pronouns: document.getElementById('pronouns').value,
                 gender: document.getElementById('gender').value,
                 race: document.getElementById('race').value,
@@ -404,6 +484,13 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (!validation.valid) {
                 alert(validation.errors.join('\n'));
                 return;
+            }
+
+            if (validation.warnings?.length) {
+                const confirmed = confirm(`${validation.warnings.join('\n\n')}\n\nSave anyway?`);
+                if (!confirmed) {
+                    return;
+                }
             }
 
             await Storage.saveUserData(validation.normalizedData);
@@ -571,7 +658,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             if (transgenderRadio) transgenderRadio.checked = true;
         }
 
-        document.getElementById('sexualOrientation').value = userData.sexualOrientation || '';
+        setSexualOrientationSelections(userData.sexualOrientation || '');
         document.getElementById('pronouns').value = userData.pronouns || '';
         document.getElementById('gender').value = userData.gender || '';
         document.getElementById('race').value = userData.race || '';

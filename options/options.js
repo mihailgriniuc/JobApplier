@@ -23,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         formerEmployee: document.getElementById('displayFormerEmployee'),
         startAvailability: document.getElementById('displayStartAvailability'),
         gender: document.getElementById('displayGender'),
+        sexualOrientation: document.getElementById('displaySexualOrientation'),
         hispanicLatino: document.getElementById('displayHispanicLatino'),
         race: document.getElementById('displayRace'),
         veteran: document.getElementById('displayVeteran'),
@@ -35,6 +36,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const closeModalBtn = document.getElementById('closeModalBtn');
     const cancelEditBtn = document.getElementById('cancelEditBtn');
     const saveEditBtn = document.getElementById('saveEditBtn');
+    const editSexualOrientationInputs = Array.from(document.querySelectorAll('input[name="editSexualOrientation"]'));
 
     // Settings toggles
     const autoDetectToggle = document.getElementById('autoDetectToggle');
@@ -111,6 +113,117 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     };
 
+    let editSexualOrientationTouched = false;
+
+    function getSexualOrientationOptionValues(value) {
+        return (value || '')
+            .split(',')
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+
+    function formatSexualOrientation(value) {
+        const labels = [];
+        const seen = new Set();
+        const selectedValues = Validation.getSexualOrientationValues(value);
+
+        if (selectedValues.includes('bisexual') || selectedValues.includes('pansexual')) {
+            seen.add('bisexual_pansexual');
+            labels.push('Bisexual and/or pansexual');
+        }
+
+        const labelMap = {
+            asexual: 'Asexual',
+            gay: 'Gay',
+            straight: 'Heterosexual / Straight',
+            lesbian: 'Lesbian',
+            queer: 'Queer',
+            no_answer: "I don't wish to answer"
+        };
+
+        selectedValues.forEach(selectedValue => {
+            if (selectedValue === 'bisexual' || selectedValue === 'pansexual') {
+                return;
+            }
+
+            const label = labelMap[selectedValue] || selectedValue.replace(/_/g, ' ');
+            const key = label.toLowerCase();
+            if (seen.has(key)) {
+                return;
+            }
+
+            seen.add(key);
+            labels.push(label);
+        });
+
+        return labels.length > 0 ? labels.join(', ') : '-';
+    }
+
+    function setEditSexualOrientationSelections(value) {
+        const selectedValues = new Set(Validation.getSexualOrientationValues(value));
+
+        editSexualOrientationInputs.forEach(input => {
+            const optionValues = getSexualOrientationOptionValues(input.value);
+            input.checked = optionValues.some(optionValue => selectedValues.has(optionValue));
+        });
+
+        editSexualOrientationTouched = false;
+    }
+
+    function getEditSexualOrientationValue(fallbackValue = '') {
+        const selectedValues = [];
+        const seen = new Set();
+
+        editSexualOrientationInputs.forEach(input => {
+            if (!input.checked) {
+                return;
+            }
+
+            getSexualOrientationOptionValues(input.value).forEach(optionValue => {
+                if (seen.has(optionValue)) {
+                    return;
+                }
+
+                seen.add(optionValue);
+                selectedValues.push(optionValue);
+            });
+        });
+
+        if (selectedValues.length > 0) {
+            return Validation.normalizeSexualOrientationValue(selectedValues);
+        }
+
+        return editSexualOrientationTouched ? '' : Validation.normalizeSexualOrientationValue(fallbackValue);
+    }
+
+    function handleEditSexualOrientationChange(event) {
+        editSexualOrientationTouched = true;
+
+        const currentValues = getSexualOrientationOptionValues(event.target.value);
+        if (!event.target.checked) {
+            return;
+        }
+
+        if (currentValues.includes('no_answer')) {
+            editSexualOrientationInputs.forEach(input => {
+                if (input !== event.target) {
+                    input.checked = false;
+                }
+            });
+            return;
+        }
+
+        editSexualOrientationInputs.forEach(input => {
+            if (input === event.target) {
+                return;
+            }
+
+            if (getSexualOrientationOptionValues(input.value).includes('no_answer')) {
+                input.checked = false;
+            }
+        });
+    }
+
     // Initialize
     await loadData();
     await loadSettings();
@@ -153,6 +266,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         // Display demographics
         displayElements.gender.textContent = labelMappings.gender[userData?.gender] || '-';
+        displayElements.sexualOrientation.textContent = formatSexualOrientation(userData?.sexualOrientation);
         displayElements.hispanicLatino.textContent = labelMappings.hispanicLatino[userData?.hispanicLatino] || '-';
         displayElements.race.textContent = labelMappings.race[userData?.race] || '-';
         displayElements.veteran.textContent = labelMappings.veteran[userData?.veteran] || '-';
@@ -285,6 +399,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('editFormerEmployee').value = userData.formerEmployee || '';
             document.getElementById('editStartAvailability').value = userData.startAvailability || '';
             document.getElementById('editGender').value = userData.gender || '';
+            setEditSexualOrientationSelections(userData.sexualOrientation || '');
             document.getElementById('editHispanicLatino').value = userData.hispanicLatino || '';
             document.getElementById('editRace').value = userData.race || '';
             document.getElementById('editVeteran').value = userData.veteran || '';
@@ -322,6 +437,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             formerEmployee: document.getElementById('editFormerEmployee').value,
             startAvailability: document.getElementById('editStartAvailability').value,
             gender: document.getElementById('editGender').value,
+            sexualOrientation: getEditSexualOrientationValue(userData.sexualOrientation || ''),
             hispanicLatino: document.getElementById('editHispanicLatino').value,
             race: document.getElementById('editRace').value,
             veteran: document.getElementById('editVeteran').value,
@@ -332,6 +448,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!validation.valid) {
             alert(validation.errors.join('\n'));
             return;
+        }
+
+        if (validation.warnings?.length) {
+            const confirmed = confirm(`${validation.warnings.join('\n\n')}\n\nSave anyway?`);
+            if (!confirmed) {
+                return;
+            }
         }
 
         await Storage.saveUserData(validation.normalizedData);
@@ -347,6 +470,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // Settings toggles
+    editSexualOrientationInputs.forEach(input => {
+        input.addEventListener('change', handleEditSexualOrientationChange);
+    });
+
     autoDetectToggle.addEventListener('change', saveSettings);
     showIndicatorsToggle.addEventListener('change', saveSettings);
     confirmFillToggle.addEventListener('change', saveSettings);

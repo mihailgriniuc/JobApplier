@@ -124,6 +124,10 @@
                             <span class="data-value" id="displayGender">-</span>
                         </div>
                         <div class="data-item">
+                            <span class="data-label">Sexual Orientation</span>
+                            <span class="data-value" id="displaySexualOrientation">-</span>
+                        </div>
+                        <div class="data-item">
                             <span class="data-label">Are You Hispanic/Latino?</span>
                             <span class="data-value" id="displayHispanicLatino">-</span>
                         </div>
@@ -460,6 +464,39 @@
                             <option value="female">Female</option>
                             <option value="decline">Decline to self-identify</option>
                         </select>
+                    </div>
+                    <div class="form-group">
+                        <label>How would you describe your sexual orientation? (mark all that apply)</label>
+                        <div class="checkbox-group" data-field="sexualOrientation">
+                            <label class="checkbox-option">
+                                <input type="checkbox" name="editSexualOrientation" value="asexual">
+                                <span>Asexual</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input type="checkbox" name="editSexualOrientation" value="bisexual,pansexual">
+                                <span>Bisexual and/or pansexual</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input type="checkbox" name="editSexualOrientation" value="gay">
+                                <span>Gay</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input type="checkbox" name="editSexualOrientation" value="straight">
+                                <span>Heterosexual / Straight</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input type="checkbox" name="editSexualOrientation" value="lesbian">
+                                <span>Lesbian</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input type="checkbox" name="editSexualOrientation" value="queer">
+                                <span>Queer</span>
+                            </label>
+                            <label class="checkbox-option">
+                                <input type="checkbox" name="editSexualOrientation" value="no_answer">
+                                <span>I don't wish to answer</span>
+                            </label>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="editHispanicLatino">Are you Hispanic/Latino?</label>

@@ -332,6 +332,27 @@ input.error:focus {
   border: 2px solid var(--border);
 }
 
+.checkbox-group {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.checkbox-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.checkbox-option input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+  border: 2px solid var(--border);
+}
+
 /* File Upload */
 .file-upload-area {
   border: 2px dashed var(--border);

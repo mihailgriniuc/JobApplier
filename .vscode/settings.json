@@ -1,0 +1,12 @@
+{
+    "chat.mcp.serverSampling": {
+        "JobApplier/.vscode/mcp.json: context-mode": {
+            "allowedModels": [
+                "copilot/auto",
+                "copilotcli/claude-sonnet-4.6",
+                "copilot/gpt-5.3-codex",
+                "copilot/gpt-5.4"
+            ]
+        }
+    }
+}

@@ -67,18 +67,18 @@ const FieldDetector = {
             placeholders: ['city, state', 'location', 'new york, ny', 'san francisco, california', 'toronto, ontario']
         },
         workAuth: {
-            labels: ['authorized to work', 'work authorization', 'legally authorized', 'eligible to work', 'work in the u.s', 'work in the us', 'legally eligible', 'unrestricted authorization', 'unrestricted work authorization', 'authorized to work in the united states without', 'legally authorized to work in the united states without', 'authorized to work in the united states', 'legally authorized to work in the united states', 'authorized to work in the us', 'legally authorized to work in the us', 'authorized to work in the u s', 'legally authorized to work in the u s', 'authorized to work in the usa', 'legally authorized to work in the usa', 'employment authorization'],
-            names: ['workauth', 'work_auth', 'authorized', 'workauthorization', 'usworking', 'eligibility'],
-            questions: ['authorized to work', 'legally authorized', 'eligib', 'unrestricted authorization', 'without sponsorship', 'without the need for visa sponsorship', 'authorized to work in the united states', 'legally authorized to work in the united states', 'authorized to work in the us', 'legally authorized to work in the us', 'employment authorization'],
+            labels: ['authorized to work', 'work authorization', 'legally authorized', 'eligible to work', 'work in the u.s', 'work in the us', 'legally eligible', 'unrestricted authorization', 'unrestricted work authorization', 'authorized to work in the united states without', 'legally authorized to work in the united states without', 'authorized to work in the united states', 'legally authorized to work in the united states', 'authorized to work in the us', 'legally authorized to work in the us', 'authorized to work in the u s', 'legally authorized to work in the u s', 'authorized to work in the usa', 'legally authorized to work in the usa', 'employment authorization', 'authorized to reside and work', 'authorized to live and work', 'authorized to work in the country where this role is based', 'authorized to reside and work in the country where this role is based', 'right to work in the country where this role is based', 'currently authorized to reside and work', 'currently authorized to work in the country'],
+            names: ['workauth', 'work_auth', 'authorized', 'workauthorization', 'usworking', 'eligibility', 'righttowork', 'resideandwork', 'workpermit'],
+            questions: ['authorized to work', 'legally authorized', 'eligib', 'unrestricted authorization', 'without sponsorship', 'without the need for visa sponsorship', 'authorized to work in the united states', 'legally authorized to work in the united states', 'authorized to work in the us', 'legally authorized to work in the us', 'employment authorization', 'authorized to reside and work', 'authorized to live and work', 'country where this role is based', 'right to work in the country', 'currently authorized to reside and work'],
             options: {
                 yes: ['yes', 'authorized', 'eligible', 'true'],
                 no: ['no', 'not authorized', 'not eligible', 'false']
             }
         },
         sponsorship: {
-            labels: ['sponsorship', 'visa sponsorship', 'require sponsorship', 'need sponsorship', 'immigration sponsorship', 'will you now or in the future require', 'will you now, or in the future, require', 'require visa', 'need visa', 'continue working in the United States', 'employment visa status', 'visa status', 'work visa', 'employment sponsorship', 'current or future sponsorship', 'need work authorization sponsorship', 'need immigration support'],
+            labels: ['sponsorship', 'visa sponsorship', 'require sponsorship', 'need sponsorship', 'immigration sponsorship', 'will you now or in the future require', 'will you now, or in the future, require', 'require visa', 'need visa', 'continue working in the United States', 'employment visa status', 'visa status', 'work visa', 'employment sponsorship', 'current or future sponsorship', 'need work authorization sponsorship', 'need immigration support', 'require sponsorship to work in the country where this role is based', 'require sponsorship to continue working in the country where this role is based', 'require employer sponsorship to work in the country where this role is based'],
             names: ['sponsorship', 'visasponsorship', 'visa_sponsorship', 'requiresponsorship', 'futuresponsor', 'visa'],
-            questions: ['require sponsorship', 'need sponsorship', 'visa', 'immigration', 'will you now or in the future', 'will you now, or in the future', 'sponsor', 'employment visa', 'employment visa status', 'visa status', 'work visa', 'continue working', 'employment sponsorship', 'current or future sponsorship', 'require employer sponsorship', 'employment-based immigration', 'need immigration support', 'dependent on visa'],
+            questions: ['require sponsorship', 'need sponsorship', 'visa', 'immigration', 'will you now or in the future', 'will you now, or in the future', 'sponsor', 'employment visa', 'employment visa status', 'visa status', 'work visa', 'continue working', 'employment sponsorship', 'current or future sponsorship', 'require employer sponsorship', 'employment-based immigration', 'need immigration support', 'dependent on visa', 'continue working in the country where this role is based', 'require sponsorship to work in the country where this role is based'],
             options: {
                 yes: ['yes', 'true', 'will require', 'sponsorship'],
                 no: ['no', 'false', 'will not require', 'do not require']
@@ -337,13 +337,83 @@ const FieldDetector = {
     },
 
     buildFieldDetectionResult(fieldType, reason, matchedBy, matchedValue, context) {
+        const confidence = fieldType
+            ? this.getDetectionConfidence(fieldType, matchedBy, matchedValue, context)
+            : 0;
+
         return {
             fieldType,
             reason,
             matchedBy,
             matchedValue,
+            confidence,
+            confidenceLabel: this.getConfidenceLabel(confidence),
             context
         };
+    },
+
+    getDetectionConfidence(fieldType, matchedBy, matchedValue, context = {}) {
+        const baseScores = {
+            heuristic: 96,
+            type: 93,
+            label: 90,
+            name: 76,
+            placeholder: 68,
+            question: 72,
+            exclusion: 0
+        };
+
+        let score = baseScores[matchedBy] ?? 55;
+        const normalizedMatch = this.normalizeText(matchedValue);
+        const normalizedLabel = this.normalizeText(context.labelText);
+        const normalizedQuestion = this.normalizeText(context.questionText);
+        const normalizedName = this.normalizeText(`${context.name} ${context.id}`);
+
+        if (matchedBy === 'label' && normalizedMatch && normalizedLabel === normalizedMatch) {
+            score += 6;
+        }
+
+        if (matchedBy === 'question' && normalizedMatch && normalizedQuestion === normalizedMatch) {
+            score += 5;
+        }
+
+        if (matchedBy === 'name' && normalizedMatch && normalizedName.includes(normalizedMatch)) {
+            score += 4;
+        }
+
+        if (context.controlKind === 'custom-combobox') {
+            score -= 6;
+        }
+
+        if (fieldType === 'fullName' && matchedBy === 'name' && normalizedMatch === 'name') {
+            score -= 12;
+        }
+
+        if (fieldType === 'location' && matchedBy === 'placeholder') {
+            score -= 6;
+        }
+
+        if (context.isRequired) {
+            score += 1;
+        }
+
+        return Math.max(0, Math.min(100, score));
+    },
+
+    getConfidenceLabel(confidence) {
+        if (confidence >= 85) {
+            return 'high';
+        }
+
+        if (confidence >= 65) {
+            return 'medium';
+        }
+
+        if (confidence > 0) {
+            return 'low';
+        }
+
+        return 'none';
     },
 
     classifyBinaryQuestionType(questionText) {
@@ -378,6 +448,8 @@ const FieldDetector = {
             normalizedQuestion.includes('work visa') ||
             normalizedQuestion.includes('employment visa') ||
             normalizedQuestion.includes('visa status') ||
+            normalizedQuestion.includes('require sponsorship to work in the country where this role is based') ||
+            normalizedQuestion.includes('require sponsorship to continue working in the country where this role is based') ||
             normalizedQuestion.includes('will you now or in the future require');
 
         const isWorkAuthQuestion =
@@ -388,7 +460,14 @@ const FieldDetector = {
             normalizedQuestion.includes('eligible to work') ||
             normalizedQuestion.includes('right to work') ||
             normalizedQuestion.includes('employment authorization') ||
-            normalizedQuestion.includes('authorized to work lawfully');
+            normalizedQuestion.includes('authorized to work lawfully') ||
+            normalizedQuestion.includes('authorized to reside and work') ||
+            normalizedQuestion.includes('authorized to live and work') ||
+            normalizedQuestion.includes('currently authorized to reside and work') ||
+            normalizedQuestion.includes('authorized to work in the country where this role is based') ||
+            normalizedQuestion.includes('right to work in the country where this role is based') ||
+            (normalizedQuestion.includes('country where this role is based') &&
+                (normalizedQuestion.includes('authorized') || normalizedQuestion.includes('eligible') || normalizedQuestion.includes('right to work')));
 
         const isOnsiteComfortQuestion =
             normalizedQuestion.includes('comfortable working') ||
@@ -490,6 +569,8 @@ const FieldDetector = {
                             reason: customResult.reason,
                             matchedBy: customResult.matchedBy,
                             matchedValue: customResult.matchedValue,
+                            confidence: customResult.confidence,
+                            confidenceLabel: customResult.confidenceLabel,
                             context: {
                                 ...customResult.context,
                                 controlKind: 'custom-combobox'
@@ -525,6 +606,8 @@ const FieldDetector = {
                         reason: result.reason,
                         matchedBy: result.matchedBy,
                         matchedValue: result.matchedValue,
+                        confidence: result.confidence,
+                        confidenceLabel: result.confidenceLabel,
                         context: result.context
                     });
                 }

@@ -66,9 +66,7 @@
     transition: opacity 0.16s ease, transform 0.16s ease;
 }
 
-#job-autofill-widget:hover #job-autofill-panel,
-#job-autofill-widget.is-open #job-autofill-panel,
-#job-autofill-widget:focus-within #job-autofill-panel {
+#job-autofill-widget.is-open #job-autofill-panel {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0) scale(1);

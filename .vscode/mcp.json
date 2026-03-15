@@ -1,0 +1,7 @@
+{
+  "servers": {
+    "context-mode": {
+      "command": "/Users/grini/.local/bin/context-mode"
+    }
+  }
+}
