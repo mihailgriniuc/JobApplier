@@ -57,6 +57,7 @@
         floatingButtonResetTimer: null,
         lastStatusSnapshot: null,
         autofillPromise: null,
+        activeAutofillScopeRoot: null,
 
         resetDebugSession() {
             this.sessionAnswerCache = new Map();
@@ -322,7 +323,11 @@
         },
 
         buildHoverSnapshot(report = null) {
-            const detectionReport = report || FieldDetector.detectFields({ includeDiagnostics: true });
+            const activeScopeRoot = this.getCurrentAutofillScopeRoot();
+            const detectionReport = report || FieldDetector.detectFields({
+                includeDiagnostics: true,
+                root: activeScopeRoot || document
+            });
             const itemMap = new Map();
             const detectedFieldTypes = new Set(
                 (detectionReport.detected || []).map(item => item.fieldType).filter(Boolean)
@@ -888,6 +893,8 @@
                 return null;
             }
 
+            const scopeRoot = this.getCurrentAutofillScopeRoot() || document;
+
             const fields = Object.values(detectedFields || {}).flat();
             const formSet = new Set();
             let hasDocumentFields = false;
@@ -901,11 +908,11 @@
                 }
             }
 
-            let formsInOrder = Array.from(document.querySelectorAll('form')).filter(form => formSet.has(form));
+            let formsInOrder = Array.from(scopeRoot.querySelectorAll('form')).filter(form => formSet.has(form));
             const allowed = new Set();
 
             if (fields.length === 0) {
-                formsInOrder = Array.from(document.querySelectorAll('form'));
+                formsInOrder = Array.from(scopeRoot.querySelectorAll('form'));
                 hasDocumentFields = formsInOrder.length === 0;
             }
 
@@ -937,6 +944,11 @@
         },
 
         isElementAllowed(element) {
+            const scopeRoot = this.getCurrentAutofillScopeRoot();
+            if (scopeRoot && element && scopeRoot !== element && !scopeRoot.contains(element)) {
+                return false;
+            }
+
             if (!this.settings?.confirmBeforeFill) return true;
             if (!this.allowedFormKeys) return true;
             const form = element?.closest?.('form');
@@ -944,6 +956,112 @@
                 return this.allowedFormKeys.has('document');
             }
             return this.allowedFormKeys.has(this.getFormKey(form));
+        },
+
+        isZipRecruiterPage() {
+            return window.location.hostname.toLowerCase().includes('ziprecruiter.com');
+        },
+
+        getZipRecruiterApplyOverlay() {
+            if (!this.isZipRecruiterPage()) {
+                return null;
+            }
+
+            const selectors = [
+                '[role="dialog"]',
+                '[aria-modal="true"]',
+                '[class*="modal"]',
+                '[class*="Modal"]',
+                '[class*="dialog"]',
+                '[class*="Dialog"]',
+                '[data-testid*="modal"]',
+                '[data-testid*="dialog"]'
+            ].join(', ');
+
+            const candidates = Array.from(document.querySelectorAll(selectors))
+                .filter(candidate => this.isElementVisiblyRendered(candidate));
+
+            let bestCandidate = null;
+            let bestScore = -1;
+
+            for (const candidate of candidates) {
+                const text = this.normalizeText(candidate.textContent || '');
+                const hasApplySignals =
+                    text.includes('1 click apply') ||
+                    text.includes('one click apply') ||
+                    text.includes('quick apply') ||
+                    text.includes('submit application') ||
+                    text.includes('job application');
+                const formControlCount = candidate.querySelectorAll('input, select, textarea, button').length;
+                const score =
+                    (candidate.getAttribute('role') === 'dialog' ? 4 : 0) +
+                    (candidate.getAttribute('aria-modal') === 'true' ? 4 : 0) +
+                    (hasApplySignals ? 8 : 0) +
+                    Math.min(formControlCount, 8);
+
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestCandidate = candidate;
+                }
+            }
+
+            return bestScore >= 8 ? bestCandidate : null;
+        },
+
+        getZipRecruiterOverlayHost() {
+            const overlay = this.getZipRecruiterApplyOverlay();
+            if (!overlay) {
+                return null;
+            }
+
+            let host = overlay;
+            let current = overlay;
+
+            while (current && current !== document.body) {
+                const style = window.getComputedStyle(current);
+                const rect = current.getBoundingClientRect();
+                const coversViewport = rect.width >= window.innerWidth * 0.6 && rect.height >= window.innerHeight * 0.6;
+                const isOverlayLayer = ['fixed', 'absolute', 'sticky'].includes(style.position) && coversViewport;
+
+                if (style.pointerEvents !== 'none' && this.isElementVisiblyRendered(current)) {
+                    host = current;
+                }
+
+                if (isOverlayLayer && style.pointerEvents !== 'none') {
+                    host = current;
+                }
+
+                current = current.parentElement;
+            }
+
+            return host;
+        },
+
+        getCurrentAutofillScopeRoot() {
+            if (this.activeAutofillScopeRoot?.isConnected) {
+                return this.activeAutofillScopeRoot;
+            }
+
+            return this.getZipRecruiterApplyOverlay();
+        },
+
+        getFloatingWidgetHost() {
+            return this.getZipRecruiterOverlayHost() || document.body;
+        },
+
+        syncFloatingWidgetHost() {
+            if (!this.floatingWidget?.isConnected) {
+                return;
+            }
+
+            const host = this.getFloatingWidgetHost();
+            if (!host || this.floatingWidget.parentElement === host) {
+                this.floatingWidget.dataset.host = host && host !== document.body ? 'overlay' : 'page';
+                return;
+            }
+
+            host.appendChild(this.floatingWidget);
+            this.floatingWidget.dataset.host = host !== document.body ? 'overlay' : 'page';
         },
 
         getElementFillBlockReason(element) {
@@ -1085,11 +1203,12 @@
 
                         widget.appendChild(panel);
                         widget.appendChild(button);
-                        document.body.appendChild(widget);
+                        this.getFloatingWidgetHost().appendChild(widget);
 
                         this.floatingWidget = widget;
                         this.floatingButton = button;
                         this.floatingPanel = panel;
+                        this.syncFloatingWidgetHost();
                         this.renderHoverPanel(this.buildHoverSnapshot());
         },
 
@@ -1153,8 +1272,14 @@
                 // and wait for it to complete if it's being used
                 await this.waitForSiteAutofill();
 
+                this.activeAutofillScopeRoot = this.getZipRecruiterApplyOverlay();
+                this.syncFloatingWidgetHost();
+
                 // Detect fields (after site autofill has potentially filled some)
-                const detectionReport = FieldDetector.detectFields({ includeDiagnostics: true });
+                const detectionReport = FieldDetector.detectFields({
+                    includeDiagnostics: true,
+                    root: this.activeAutofillScopeRoot || document
+                });
                 const detectedFields = detectionReport.detectedFields;
                 this.logDetectionReport(detectionReport, 'initial');
 
@@ -1205,7 +1330,10 @@
                 await this.handleLocationAutocomplete();
 
                 // Some sites re-render fields after location or select interactions.
-                const refreshedReport = FieldDetector.detectFields({ includeDiagnostics: true });
+                const refreshedReport = FieldDetector.detectFields({
+                    includeDiagnostics: true,
+                    root: this.activeAutofillScopeRoot || document
+                });
                 const refreshedFields = refreshedReport.detectedFields;
                 this.logDetectionReport(refreshedReport, 'refresh');
                 this.fillTextFields(refreshedFields);
@@ -1235,6 +1363,9 @@
                     success: false,
                     error: error.message || 'An error occurred during autofill'
                 };
+            } finally {
+                this.activeAutofillScopeRoot = null;
+                this.syncFloatingWidgetHost();
             }
         },
 
@@ -1584,6 +1715,441 @@
             }
 
             return this.parsedResumeData.structuredData;
+        },
+
+        getParsedResumeWorkExperienceEntries() {
+            const parsedResume = this.getAiParsedResumePayload();
+            if (!parsedResume) {
+                return [];
+            }
+
+            const workExperience = Array.isArray(parsedResume.workExperience)
+                ? parsedResume.workExperience
+                : Array.isArray(parsedResume.experience)
+                    ? parsedResume.experience
+                    : Array.isArray(parsedResume.employment)
+                        ? parsedResume.employment
+                        : [];
+
+            return workExperience.filter(entry => entry && typeof entry === 'object');
+        },
+
+        parseResumeDateValue(rawValue, fallbackToNow = false) {
+            if (rawValue instanceof Date && !Number.isNaN(rawValue.getTime())) {
+                return rawValue;
+            }
+
+            if (typeof rawValue !== 'string') {
+                return fallbackToNow ? new Date() : null;
+            }
+
+            const value = rawValue.trim();
+            if (!value) {
+                return fallbackToNow ? new Date() : null;
+            }
+
+            const normalizedValue = this.normalizeText(value);
+            if (fallbackToNow && (normalizedValue === 'present' || normalizedValue === 'current' || normalizedValue === 'now' || normalizedValue === 'today')) {
+                return new Date();
+            }
+
+            const directTimestamp = Date.parse(value);
+            if (!Number.isNaN(directTimestamp)) {
+                return new Date(directTimestamp);
+            }
+
+            const yearMonthMatch = value.match(/^(\d{4})[-/](\d{1,2})$/);
+            if (yearMonthMatch) {
+                return new Date(Number(yearMonthMatch[1]), Math.max(0, Number(yearMonthMatch[2]) - 1), 1);
+            }
+
+            const monthYearMatch = value.match(/^(\d{1,2})[-/](\d{4})$/);
+            if (monthYearMatch) {
+                return new Date(Number(monthYearMatch[2]), Math.max(0, Number(monthYearMatch[1]) - 1), 1);
+            }
+
+            const yearOnlyMatch = value.match(/^(19|20)\d{2}$/);
+            if (yearOnlyMatch) {
+                return new Date(Number(value), 0, 1);
+            }
+
+            return fallbackToNow ? new Date() : null;
+        },
+
+        getResumeEntryDurationMonths(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return 0;
+            }
+
+            const startDate = this.parseResumeDateValue(entry.startDate);
+            const endDate = this.parseResumeDateValue(entry.endDate, entry.current === true);
+            if (!startDate || !endDate) {
+                return 0;
+            }
+
+            const elapsedMs = endDate.getTime() - startDate.getTime();
+            if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
+                return 0;
+            }
+
+            return Math.max(0, elapsedMs / (1000 * 60 * 60 * 24 * 30.4375));
+        },
+
+        getResumeEntrySearchText(entry) {
+            if (!entry || typeof entry !== 'object') {
+                return '';
+            }
+
+            return this.normalizeText([
+                entry.title,
+                entry.role,
+                entry.position,
+                entry.company,
+                entry.organization,
+                entry.employer,
+                entry.summary,
+                entry.description,
+                ...(Array.isArray(entry.highlights) ? entry.highlights : []),
+                ...(Array.isArray(entry.technologies) ? entry.technologies : [])
+            ].filter(Boolean).join(' '));
+        },
+
+        getTotalResumeExperienceYears() {
+            const entries = this.getParsedResumeWorkExperienceEntries();
+            if (entries.length === 0) {
+                return 0;
+            }
+
+            const months = entries.reduce((total, entry) => total + this.getResumeEntryDurationMonths(entry), 0);
+            return Math.round((months / 12) * 10) / 10;
+        },
+
+        extractExperienceRequirement(payload = {}) {
+            const combinedText = [
+                payload.question,
+                payload.fieldLabel,
+                payload.helperText,
+                payload.sectionContext
+            ].filter(Boolean).join(' ');
+            const normalized = this.normalizeText(combinedText);
+            if (!normalized) {
+                return null;
+            }
+
+            const minimumYearsMatch = normalized.match(/(?:at least|minimum of|minimum|over|more than)?\s*(\d+(?:\.\d+)?)\+?\s+years? of experience/);
+            const minimumYears = minimumYearsMatch ? Number(minimumYearsMatch[1]) : null;
+            const topics = this.extractResumeExperienceTopics(payload);
+
+            if (minimumYears === null && topics.length === 0) {
+                return null;
+            }
+
+            return {
+                minimumYears,
+                topics
+            };
+        },
+
+        flattenResumeEvidenceStrings(value, collector = []) {
+            if (typeof value === 'string') {
+                const text = value.trim();
+                if (text) {
+                    collector.push(text);
+                }
+                return collector;
+            }
+
+            if (Array.isArray(value)) {
+                value.forEach(item => this.flattenResumeEvidenceStrings(item, collector));
+                return collector;
+            }
+
+            if (value && typeof value === 'object') {
+                Object.values(value).forEach(item => this.flattenResumeEvidenceStrings(item, collector));
+            }
+
+            return collector;
+        },
+
+        getResumeEvidenceCorpus() {
+            const snippets = [];
+            const seen = new Set();
+            const pushSnippet = value => {
+                const text = typeof value === 'string' ? value.trim() : '';
+                if (!text) {
+                    return;
+                }
+
+                const normalized = this.normalizeText(text);
+                if (!normalized || seen.has(normalized)) {
+                    return;
+                }
+
+                seen.add(normalized);
+                snippets.push(text);
+            };
+
+            const parsedResumeSections = this.getParsedResumeSections();
+            if (parsedResumeSections) {
+                pushSnippet(parsedResumeSections.resumeSummary);
+                [
+                    parsedResumeSections.skills,
+                    parsedResumeSections.experienceHighlights,
+                    parsedResumeSections.educationHighlights,
+                    parsedResumeSections.certifications,
+                    parsedResumeSections.projects
+                ].forEach(section => {
+                    if (Array.isArray(section)) {
+                        section.forEach(pushSnippet);
+                    }
+                });
+            }
+
+            const parsedResume = this.getAiParsedResumePayload();
+            if (parsedResume) {
+                this.flattenResumeEvidenceStrings(parsedResume).forEach(pushSnippet);
+            }
+
+            return snippets;
+        },
+
+        extractResumeExperienceTopics(payload = {}) {
+            const combinedText = [
+                payload.question,
+                payload.fieldLabel,
+                payload.helperText,
+                payload.sectionContext
+            ].filter(Boolean).join(' ');
+            const normalized = this.normalizeText(combinedText);
+            if (!normalized) {
+                return [];
+            }
+
+            const patterns = [
+                /years? of experience in ([a-z0-9 +.#\/-]{2,80})/g,
+                /years? of experience with ([a-z0-9 +.#\/-]{2,80})/g,
+                /experience in ([a-z0-9 +.#\/-]{2,80})/g,
+                /experience with ([a-z0-9 +.#\/-]{2,80})/g,
+                /worked with ([a-z0-9 +.#\/-]{2,80})/g,
+                /knowledge of ([a-z0-9 +.#\/-]{2,80})/g,
+                /familiar with ([a-z0-9 +.#\/-]{2,80})/g,
+                /proficient in ([a-z0-9 +.#\/-]{2,80})/g,
+                /expertise in ([a-z0-9 +.#\/-]{2,80})/g,
+                /skills? with ([a-z0-9 +.#\/-]{2,80})/g,
+                /know how to use ([a-z0-9 +.#\/-]{2,80})/g,
+                /using ([a-z0-9 +.#\/-]{2,80})/g
+            ];
+
+            const topics = new Set();
+            const stopPhrases = [
+                'for this role',
+                'in this role',
+                'professionally',
+                'at work',
+                'on the job',
+                'in production'
+            ];
+
+            const addTopic = rawTopic => {
+                let topic = this.normalizeText(rawTopic || '');
+                if (!topic) {
+                    return;
+                }
+
+                stopPhrases.forEach(phrase => {
+                    const index = topic.indexOf(phrase);
+                    if (index > 0) {
+                        topic = topic.slice(0, index).trim();
+                    }
+                });
+
+                topic = topic
+                    .replace(/^(the|a|an)\s+/, '')
+                    .replace(/\b(technology|technologies|tools|tool|framework|frameworks|platform|platforms)\b$/g, '')
+                    .trim();
+
+                if (!topic || topic.length < 2) {
+                    return;
+                }
+
+                topic.split(/,|\//).map(part => part.trim()).filter(Boolean).forEach(part => {
+                    if (part.length >= 2) {
+                        topics.add(part);
+                    }
+                });
+
+                if (!topic.includes(' and ')) {
+                    topics.add(topic);
+                    return;
+                }
+
+                const compoundSafePhrases = ['research and development', 'sales and marketing'];
+                if (compoundSafePhrases.some(phrase => topic.includes(phrase))) {
+                    topics.add(topic);
+                    return;
+                }
+
+                topic.split(/\band\b/).map(part => part.trim()).filter(Boolean).forEach(part => {
+                    if (part.length >= 2) {
+                        topics.add(part);
+                    }
+                });
+            };
+
+            for (const pattern of patterns) {
+                let match;
+                while ((match = pattern.exec(normalized)) !== null) {
+                    addTopic(match[1]);
+                }
+            }
+
+            return Array.from(topics);
+        },
+
+        getResumeTopicAliases(topic = '') {
+            const normalizedTopic = this.normalizeText(topic);
+            if (!normalizedTopic) {
+                return [];
+            }
+
+            const aliases = new Set([normalizedTopic]);
+
+            if (normalizedTopic === 'react' || normalizedTopic.includes('react js') || normalizedTopic.includes('reactjs')) {
+                ['react', 'react js', 'reactjs', 'react native'].forEach(alias => aliases.add(alias));
+            }
+
+            if (
+                normalizedTopic.includes('software development') ||
+                normalizedTopic.includes('software engineering') ||
+                normalizedTopic.includes('software developer') ||
+                normalizedTopic.includes('software engineer')
+            ) {
+                [
+                    'software development',
+                    'software engineering',
+                    'software developer',
+                    'software engineer',
+                    'developer',
+                    'engineer',
+                    'frontend',
+                    'front end',
+                    'backend',
+                    'back end',
+                    'full stack',
+                    'fullstack',
+                    'web development'
+                ].forEach(alias => aliases.add(alias));
+            }
+
+            if (normalizedTopic.includes('react native')) {
+                ['react native', 'react', 'react native app'].forEach(alias => aliases.add(alias));
+            }
+
+            if (normalizedTopic === 'ai' || normalizedTopic.includes('artificial intelligence') || normalizedTopic.includes('generative ai')) {
+                ['ai', 'artificial intelligence', 'generative ai', 'genai', 'llm', 'llms', 'openai', 'machine learning', 'ml'].forEach(alias => aliases.add(alias));
+            }
+
+            if (normalizedTopic === 'ml') {
+                ['ml', 'machine learning', 'ai', 'artificial intelligence'].forEach(alias => aliases.add(alias));
+            }
+
+            return Array.from(aliases);
+        },
+
+        findResumeEvidenceForTopics(topics = []) {
+            if (!Array.isArray(topics) || topics.length === 0) {
+                return [];
+            }
+
+            const corpus = this.getResumeEvidenceCorpus();
+            if (corpus.length === 0) {
+                return [];
+            }
+
+            const matches = [];
+            const seen = new Set();
+
+            for (const topic of topics) {
+                const aliases = this.getResumeTopicAliases(topic);
+                for (const snippet of corpus) {
+                    const normalizedSnippet = this.normalizeText(snippet);
+                    if (!normalizedSnippet) {
+                        continue;
+                    }
+
+                    const matched = aliases.some(alias => normalizedSnippet.includes(alias));
+                    if (!matched) {
+                        continue;
+                    }
+
+                    const key = `${this.normalizeText(topic)}|${normalizedSnippet}`;
+                    if (seen.has(key)) {
+                        continue;
+                    }
+
+                    seen.add(key);
+                    matches.push({
+                        topic,
+                        snippet: snippet.length > 220 ? `${snippet.slice(0, 217)}...` : snippet
+                    });
+                }
+            }
+
+            return matches.slice(0, 8);
+        },
+
+        getQuestionSpecificResumeEvidence(payload = {}) {
+            const topics = this.extractResumeExperienceTopics(payload);
+            if (topics.length === 0) {
+                return null;
+            }
+
+            const matches = this.findResumeEvidenceForTopics(topics);
+            if (matches.length === 0) {
+                return null;
+            }
+
+            return {
+                topics,
+                matches
+            };
+        },
+
+        getResumeExperienceAssessment(payload = {}) {
+            const requirement = this.extractExperienceRequirement(payload);
+            const evidence = this.getQuestionSpecificResumeEvidence(payload);
+            const entries = this.getParsedResumeWorkExperienceEntries();
+            const totalYears = this.getTotalResumeExperienceYears();
+
+            if (!requirement && !evidence) {
+                return null;
+            }
+
+            let relevantYears = 0;
+            let matchedEntries = [];
+
+            if (entries.length > 0 && requirement?.topics?.length) {
+                matchedEntries = entries.filter(entry => {
+                    const entryText = this.getResumeEntrySearchText(entry);
+                    return requirement.topics.some(topic => this.getResumeTopicAliases(topic).some(alias => entryText.includes(alias)));
+                });
+                relevantYears = matchedEntries.reduce((total, entry) => total + this.getResumeEntryDurationMonths(entry), 0) / 12;
+            }
+
+            const roundedRelevantYears = Math.round(relevantYears * 10) / 10;
+            const qualifies = requirement?.minimumYears !== null && requirement?.minimumYears !== undefined
+                ? ((roundedRelevantYears > 0 ? roundedRelevantYears : totalYears) + 0.1 >= requirement.minimumYears && (roundedRelevantYears > 0 || totalYears > 0))
+                : (evidence?.matches?.length || 0) > 0;
+
+            return {
+                minimumYears: requirement?.minimumYears ?? null,
+                topics: requirement?.topics || evidence?.topics || [],
+                relevantYears: roundedRelevantYears,
+                totalYears,
+                matchedEvidence: evidence?.matches || [],
+                qualified: qualifies,
+                matchedRoleCount: matchedEntries.length
+            };
         },
 
         getParsedResumeEducationEntries() {
@@ -2259,7 +2825,8 @@
                 race: this.userData?.race || '',
                 hispanicLatino: this.userData?.hispanicLatino || '',
                 veteran: this.userData?.veteran || '',
-                disability: this.userData?.disability || ''
+                disability: this.userData?.disability || '',
+                totalResumeExperienceYears: this.getTotalResumeExperienceYears()
             };
             const parsedResumeSections = this.getParsedResumeSections();
 
@@ -2320,6 +2887,25 @@
                 assign('educationHighlights', Array.isArray(parsedResumeSections.educationHighlights) ? parsedResumeSections.educationHighlights.slice(0, 6) : []);
                 assign('certifications', Array.isArray(parsedResumeSections.certifications) ? parsedResumeSections.certifications.slice(0, 6) : []);
                 assign('projects', Array.isArray(parsedResumeSections.projects) ? parsedResumeSections.projects.slice(0, 6) : []);
+            };
+
+            const addQuestionSpecificResumeFacts = () => {
+                const evidence = this.getQuestionSpecificResumeEvidence(payload);
+                if (!evidence) {
+                    return;
+                }
+
+                assign('resumeMatchedTopics', evidence.topics);
+                assign('resumeMatchedEvidence', evidence.matches.map(match => `${match.topic}: ${match.snippet}`));
+            };
+
+            const addResumeExperienceAssessment = () => {
+                const assessment = this.getResumeExperienceAssessment(payload);
+                if (!assessment) {
+                    return;
+                }
+
+                assign('resumeExperienceAssessment', assessment);
             };
 
             const addSharedJobFacts = () => {
@@ -2402,6 +2988,8 @@
                 default:
                     addSharedJobFacts();
                     addResumeFacts();
+                    addQuestionSpecificResumeFacts();
+                    addResumeExperienceAssessment();
                     assign('gender', profile.gender);
                     assign('transgender', profile.transgender);
                     assign('sexualOrientation', this.getStructuredChoiceValues('sexualOrientation', profile.sexualOrientation));
@@ -3977,26 +4565,52 @@
             let matchedOption = this.findEducationSchoolOption(initialOptions);
 
             if (!matchedOption) {
+                // Strategy 1: clear input and wait for the full unfiltered list.
+                // Many school comboboxes use async server search — typing "Other" searches
+                // for schools named "Other" (0 results). "Other" only appears in the default
+                // unfiltered list shown when the input is empty.
                 this.setComboboxSearchValue(root, '');
-                await new Promise(resolve => setTimeout(resolve, 80));
-                await this.openCustomCombobox(root);
-                this.setComboboxSearchValue(root, 'Other');
+                await new Promise(resolve => setTimeout(resolve, 300));
 
-                const otherState = await this.waitForComboboxState(root, {
-                    timeoutMs: 1500,
+                // Ensure the dropdown is still open after clearing.
+                if (root.getAttribute('aria-expanded') !== 'true') {
+                    await this.openCustomCombobox(root);
+                    await new Promise(resolve => setTimeout(resolve, 150));
+                }
+
+                const unfilteredState = await this.waitForComboboxState(root, {
+                    timeoutMs: 2000,
                     intervalMs: 150,
-                    minWaitMs: 1500
+                    minWaitMs: 500
                 });
-                const otherOptions = otherState.options.map(option => ({
+                const unfilteredOptions = unfilteredState.options.map(option => ({
                     text: (option.textContent || '').replace(/\s+/g, ' ').trim(),
                     element: option
                 })).filter(option => option.text && !this.isPlaceholderOption(option.text));
-                matchedOption = this.findStrictOtherChoiceOption(otherOptions);
+
+                // Use broader match — handles "Other", "Other (please specify)", etc.
+                matchedOption = this.findOtherChoiceOption(unfilteredOptions);
+
+                // Strategy 2: if empty list (combobox requires typing), try typing "other".
+                if (!matchedOption && unfilteredOptions.length === 0) {
+                    this.setComboboxSearchValue(root, 'other');
+                    const otherTypedState = await this.waitForComboboxState(root, {
+                        timeoutMs: 1500,
+                        intervalMs: 150,
+                        minWaitMs: 800
+                    });
+                    const otherTypedOptions = otherTypedState.options.map(option => ({
+                        text: (option.textContent || '').replace(/\s+/g, ' ').trim(),
+                        element: option
+                    })).filter(option => option.text && !this.isPlaceholderOption(option.text));
+                    matchedOption = this.findOtherChoiceOption(otherTypedOptions);
+                }
             }
 
             if (!matchedOption) {
-                const options = initialOptions.length > 0 ? initialOptions : existingOptions;
-                matchedOption = this.findStrictOtherChoiceOption(options);
+                // Last resort: search existingOptions / initialOptions for any "other" entry.
+                const fallbackPool = initialOptions.length > 0 ? initialOptions : existingOptions;
+                matchedOption = this.findOtherChoiceOption(fallbackPool);
             }
 
             if (!matchedOption) {
@@ -5140,6 +5754,15 @@
                     continue;
                 }
 
+                const resumeBackedOption = this.findResumeBackedChoiceOption(candidate);
+                if (resumeBackedOption) {
+                    if (this.applyChoiceCandidateOption(candidate, resumeBackedOption, 'resume')) {
+                        this.filledFields.push({ type: candidate.detectedFieldType || 'aiChoiceField', element: resumeBackedOption.element });
+                        this.highlightField(resumeBackedOption.element, true);
+                    }
+                    continue;
+                }
+
                 batchedCandidates.push(candidate);
             }
 
@@ -5405,6 +6028,19 @@
 
         findBestAiChoiceMatch(options, answer) {
             const normalizedAnswer = this.normalizeText(answer);
+            const binaryOptions = this.getBinaryChoiceOptions(options);
+
+            if (binaryOptions.yes && binaryOptions.no) {
+                const answerPolarity = this.getBinaryAnswerPolarity(normalizedAnswer);
+                if (answerPolarity === 'yes') {
+                    return binaryOptions.yes;
+                }
+
+                if (answerPolarity === 'no') {
+                    return binaryOptions.no;
+                }
+            }
+
             let bestMatch = null;
             let bestScore = -1;
 
@@ -5434,6 +6070,104 @@
             }
 
             return bestScore > 0 ? bestMatch : null;
+        },
+
+        getBinaryChoiceOptions(options = []) {
+            if (!Array.isArray(options) || options.length === 0) {
+                return { yes: null, no: null };
+            }
+
+            const yes = options.find(option => {
+                const normalizedText = this.normalizeText(option?.text || option?.textContent || option?.value || '');
+                return normalizedText === 'yes' || normalizedText.startsWith('yes ') || normalizedText === 'true';
+            }) || null;
+
+            const no = options.find(option => {
+                const normalizedText = this.normalizeText(option?.text || option?.textContent || option?.value || '');
+                return normalizedText === 'no' || normalizedText.startsWith('no ') || normalizedText === 'false';
+            }) || null;
+
+            return { yes, no };
+        },
+
+        getBinaryAnswerPolarity(answer = '') {
+            const normalizedAnswer = this.normalizeText(answer);
+            if (!normalizedAnswer) {
+                return null;
+            }
+
+            const negativeSignals = [
+                'no',
+                'not',
+                'do not',
+                'don t',
+                'have not',
+                'haven t',
+                'without experience',
+                'no experience',
+                'cannot',
+                'can t'
+            ];
+
+            if (negativeSignals.some(signal => normalizedAnswer === signal || normalizedAnswer.startsWith(`${signal} `) || normalizedAnswer.includes(` ${signal} `))) {
+                return 'no';
+            }
+
+            if (/\b\d+(?:\.\d+)?\s+years?\b/.test(normalizedAnswer)) {
+                return 'yes';
+            }
+
+            const positiveSignals = [
+                'yes',
+                'i have',
+                'have experience',
+                'experienced',
+                'familiar',
+                'proficient',
+                'knowledge',
+                'worked with',
+                'used',
+                'can',
+                'comfortable'
+            ];
+
+            if (positiveSignals.some(signal => normalizedAnswer === signal || normalizedAnswer.startsWith(`${signal} `) || normalizedAnswer.includes(` ${signal} `))) {
+                return 'yes';
+            }
+
+            return null;
+        },
+
+        findResumeBackedChoiceOption(candidate) {
+            if (!candidate || !Array.isArray(candidate.options) || candidate.options.length === 0) {
+                return null;
+            }
+
+            const binaryOptions = this.getBinaryChoiceOptions(candidate.options);
+            if (!binaryOptions.yes || !binaryOptions.no) {
+                return null;
+            }
+
+            const assessment = this.getResumeExperienceAssessment({
+                question: candidate.question,
+                fieldLabel: candidate.label,
+                helperText: candidate.helperText,
+                sectionContext: candidate.sectionContext
+            });
+
+            if (!assessment) {
+                return null;
+            }
+
+            if (assessment.minimumYears !== null) {
+                return assessment.qualified ? binaryOptions.yes : null;
+            }
+
+            if (!assessment.matchedEvidence || assessment.matchedEvidence.length === 0) {
+                return null;
+            }
+
+            return binaryOptions.yes;
         },
 
         applySelectOption(select, option, context = {}) {
@@ -6058,7 +6792,9 @@
                     continue;
                 }
 
-                const radios = FieldDetector.findYesNoRadios(fieldType);
+                const radios = FieldDetector.findYesNoRadios(fieldType, {
+                    root: this.getCurrentAutofillScopeRoot() || document
+                });
                 if (!radios) {
                     continue;
                 }
@@ -6357,6 +7093,8 @@
                 const allRadios = document.querySelectorAll('input[type="radio"]');
 
                 for (const radio of allRadios) {
+                    if (!this.isElementAllowed(radio) || radio.disabled) continue;
+
                     // Get the question/label text
                     const questionText = FieldDetector.getQuestionText(radio).toLowerCase();
                     const labelText = FieldDetector.getLabelText(radio).toLowerCase();
@@ -7231,6 +7969,10 @@
 
             this.mutationObserver = new MutationObserver((mutations) => {
                 let hasNewForms = false;
+
+                if (this.floatingWidget?.isConnected && this.isZipRecruiterPage()) {
+                    this.syncFloatingWidgetHost();
+                }
 
                 for (const mutation of mutations) {
                     for (const node of mutation.addedNodes) {

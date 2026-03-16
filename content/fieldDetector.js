@@ -554,7 +554,10 @@ const FieldDetector = {
             unmatched: [],
             skipped: []
         };
-        const inputs = document.querySelectorAll('input, select, textarea');
+        const queryRoot = options.root && typeof options.root.querySelectorAll === 'function'
+            ? options.root
+            : document;
+        const inputs = queryRoot.querySelectorAll('input, select, textarea');
 
         inputs.forEach(input => {
             // Skip hidden, submit, button, checkbox (for individual checkboxes), file inputs
@@ -664,10 +667,19 @@ const FieldDetector = {
         const ariaLabelledBy = context.ariaLabelledBy.toLowerCase();
         const containerText = context.containerText.toLowerCase();
         const normalizedAllText = context.normalizedAllText;
+        const normalizedLocalText = this.normalizeText([
+            context.labelText,
+            context.questionText,
+            context.name,
+            context.id,
+            context.placeholder,
+            context.ariaLabel,
+            context.ariaLabelledBy
+        ].filter(Boolean).join(' '));
 
         const isPreferredFirstNameField =
-            normalizedAllText.includes('preferred') &&
-            (normalizedAllText.includes('first') || normalizedAllText.includes('given') || normalizedAllText.includes('go by') || normalizedAllText.includes('chosen'));
+            normalizedLocalText.includes('preferred') &&
+            (normalizedLocalText.includes('first') || normalizedLocalText.includes('given') || normalizedLocalText.includes('go by') || normalizedLocalText.includes('chosen'));
 
         if (isPreferredFirstNameField) {
             const result = this.buildFieldDetectionResult(
@@ -816,16 +828,23 @@ const FieldDetector = {
                 return prevSibling.textContent.trim();
             }
 
-            // Check for text in parent's first child if input is not first
             const siblings = Array.from(parent.children);
             const inputIndex = siblings.indexOf(input);
             if (inputIndex > 0) {
-                const textNodes = Array.from(parent.childNodes)
-                    .filter(node => node.nodeType === Node.TEXT_NODE ||
-                        (node.nodeType === Node.ELEMENT_NODE &&
-                            (node.tagName === 'LABEL' || node.tagName === 'SPAN')));
-                if (textNodes.length > 0) {
-                    return textNodes.map(n => n.textContent.trim()).join(' ');
+                const nearbySibling = siblings
+                    .slice(Math.max(0, inputIndex - 3), inputIndex)
+                    .reverse()
+                    .find(sibling => {
+                        if (!sibling || sibling.querySelector?.('input, select, textarea, button')) {
+                            return false;
+                        }
+
+                        return ['LABEL', 'SPAN', 'DIV', 'P', 'STRONG'].includes(sibling.tagName)
+                            && (sibling.textContent || '').trim().length <= 120;
+                    });
+
+                if (nearbySibling) {
+                    return nearbySibling.textContent.trim();
                 }
             }
         }
@@ -872,7 +891,14 @@ const FieldDetector = {
         // Look for heading or label in parent container
         const container = input.closest('[class*="question"], [class*="field"], [class*="form-group"]');
         if (container) {
-            const heading = container.querySelector('h1, h2, h3, h4, h5, h6, label, .label, [class*="question"]');
+            const visibleControls = Array.from(container.querySelectorAll('input, select, textarea'))
+                .filter(control => control.type !== 'hidden');
+            const isGroupedChoiceInput = input instanceof HTMLInputElement && ['radio', 'checkbox'].includes((input.type || '').toLowerCase());
+            const shouldUseContainerHeading = isGroupedChoiceInput || visibleControls.length <= 1;
+            const heading = shouldUseContainerHeading
+                ? container.querySelector('h1, h2, h3, h4, h5, h6, label, .label, [class*="question"]')
+                : null;
+
             if (heading && heading !== input.closest('label')) {
                 return heading.textContent.trim();
             }
@@ -886,8 +912,11 @@ const FieldDetector = {
      * @param {string} fieldType 
      * @returns {Object} { yesRadio, noRadio }
      */
-    findYesNoRadios(fieldType) {
-        const allRadios = document.querySelectorAll('input[type="radio"]');
+    findYesNoRadios(fieldType, options = {}) {
+        const queryRoot = options.root && typeof options.root.querySelectorAll === 'function'
+            ? options.root
+            : document;
+        const allRadios = queryRoot.querySelectorAll('input[type="radio"]');
         const groups = new Map();
 
         for (const radio of allRadios) {
