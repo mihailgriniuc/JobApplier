@@ -13,6 +13,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         email: document.getElementById('displayEmail'),
         phone: document.getElementById('displayPhone'),
         linkedin: document.getElementById('displayLinkedin'),
+        github: document.getElementById('displayGithub'),
+        website: document.getElementById('displayWebsite'),
         location: document.getElementById('displayLocation'),
         workAuth: document.getElementById('displayWorkAuth'),
         sponsorship: document.getElementById('displaySponsorship'),
@@ -256,6 +258,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         displayElements.email.textContent = userData?.email || '-';
         displayElements.phone.textContent = userData?.phone || '-';
         displayElements.linkedin.textContent = userData?.linkedin || '-';
+        displayElements.github.textContent = userData?.github || '-';
+        displayElements.website.textContent = userData?.website || '-';
         displayElements.location.textContent = formatLocation(userData?.city, userData?.state);
 
         // Display work auth
@@ -527,6 +531,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             document.getElementById('editEmail').value = userData.email || '';
             document.getElementById('editPhone').value = userData.phone || '';
             document.getElementById('editLinkedin').value = userData.linkedin || '';
+            document.getElementById('editGithub').value = userData.github || '';
+            document.getElementById('editWebsite').value = userData.website || '';
             document.getElementById('editCity').value = userData.city || '';
             document.getElementById('editState').value = userData.state || '';
             document.getElementById('editWorkAuth').value = userData.workAuth || '';
@@ -565,6 +571,8 @@ document.addEventListener('DOMContentLoaded', async () => {
             email: document.getElementById('editEmail').value.trim(),
             phone: document.getElementById('editPhone').value.trim(),
             linkedin: document.getElementById('editLinkedin').value.trim(),
+            github: document.getElementById('editGithub').value.trim(),
+            website: document.getElementById('editWebsite').value.trim(),
             city: document.getElementById('editCity').value.trim(),
             state: document.getElementById('editState').value.trim(),
             workAuth: document.getElementById('editWorkAuth').value,

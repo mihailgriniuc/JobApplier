@@ -73,6 +73,8 @@ const Validation = {
             email: (source.email || '').trim(),
             phone: (source.phone || '').trim(),
             linkedin: this.normalizeLinkedInUrl(source.linkedin || ''),
+            github: this.normalizeUrl(source.github || ''),
+            website: this.normalizeUrl(source.website || source.portfolio || ''),
             city: (source.city || '').trim(),
             state: (source.state || '').trim(),
             workAuth: (source.workAuth || '').trim(),
@@ -157,6 +159,29 @@ const Validation = {
         return linkedinRegex.test(url.trim());
     },
 
+    isValidGitHubUrl(url) {
+        if (!url) return true; // Optional field
+
+        try {
+            const parsed = new URL(this.normalizeUrl(url));
+            const hostname = parsed.hostname.toLowerCase();
+            return (hostname === 'github.com' || hostname === 'www.github.com') && parsed.pathname.trim() !== '/';
+        } catch (error) {
+            return false;
+        }
+    },
+
+    isValidWebUrl(url) {
+        if (!url) return true; // Optional field
+
+        try {
+            const parsed = new URL(this.normalizeUrl(url));
+            return ['http:', 'https:'].includes(parsed.protocol) && Boolean(parsed.hostname);
+        } catch (error) {
+            return false;
+        }
+    },
+
     /**
      * Validate phone number (basic US format)
      * @param {string} phone 
@@ -232,6 +257,14 @@ const Validation = {
             errors.push('Please enter a valid LinkedIn profile URL');
         }
 
+        if (normalizedData.github && !this.isValidGitHubUrl(normalizedData.github)) {
+            errors.push('Please enter a valid GitHub URL');
+        }
+
+        if (normalizedData.website && !this.isValidWebUrl(normalizedData.website)) {
+            errors.push('Please enter a valid personal website or portfolio URL');
+        }
+
         if (normalizedData.phone && !this.isValidPhone(normalizedData.phone)) {
             errors.push('Please enter a valid phone number');
         }
@@ -269,14 +302,22 @@ const Validation = {
      */
     normalizeLinkedInUrl(url) {
         if (!url) return '';
-        let normalized = url.trim();
-        if (!normalized.startsWith('http')) {
-            normalized = 'https://' + normalized;
-        }
+        let normalized = this.normalizeUrl(url);
         if (!normalized.includes('www.')) {
             normalized = normalized.replace('linkedin.com', 'www.linkedin.com');
         }
         return normalized;
+    },
+
+    normalizeUrl(url) {
+        if (!url) return '';
+
+        const trimmed = url.trim();
+        if (!trimmed) {
+            return '';
+        }
+
+        return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
     }
 };
 

@@ -137,6 +137,7 @@
                 formerEmployee: 'Former employee',
                 fullName: 'Full name',
                 gender: 'Gender',
+                github: 'GitHub',
                 hispanicLatino: 'Hispanic/Latino',
                 internshipStatus: 'Internship status',
                 lastName: 'Last name',
@@ -157,6 +158,7 @@
                 state: 'State',
                 transgender: 'Transgender status',
                 veteran: 'Veteran status',
+                website: 'Website / portfolio',
                 workAuth: 'Work authorization'
             };
 
@@ -1580,6 +1582,8 @@
                 phoneCountryCode: this.getDefaultPhoneCountryCode(),
                 phone: this.userData.phone,
                 linkedin: this.userData.linkedin,
+                github: this.userData.github,
+                website: this.userData.website,
                 city: this.userData.city,
                 state: this.userData.state,
                 location: this.formatLocation(),
@@ -2807,6 +2811,8 @@
                 phone: this.userData?.phone || '',
                 phoneCountryCode: this.getDefaultPhoneCountryCode(),
                 linkedin: this.userData?.linkedin || '',
+                github: this.userData?.github || '',
+                website: this.userData?.website || '',
                 city: this.userData?.city || '',
                 state: this.userData?.state || '',
                 location: this.formatLocation(),

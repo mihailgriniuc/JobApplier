@@ -51,6 +51,16 @@ const FieldDetector = {
             names: ['linkedin', 'linkedinurl', 'linkedin_url', 'linkedinprofile'],
             placeholders: ['linkedin.com', 'linkedin profile', 'linkedin url']
         },
+        github: {
+            labels: ['github', 'github profile', 'github url'],
+            names: ['github', 'githuburl', 'github_url', 'githubprofile', 'github_profile'],
+            placeholders: ['github.com', 'github profile', 'github url']
+        },
+        website: {
+            labels: ['personal website', 'website', 'website url', 'portfolio', 'portfolio url', 'personal portfolio', 'personal site'],
+            names: ['website', 'websiteurl', 'website_url', 'personalwebsite', 'personal_website', 'portfolio', 'portfoliourl', 'portfolio_url', 'otherurl', 'other_url', 'homepage'],
+            placeholders: ['website', 'website url', 'portfolio', 'portfolio url', 'https://your-site.com']
+        },
         city: {
             labels: ['city', 'town'],
             names: ['city', 'town', 'locality'],
