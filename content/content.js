@@ -533,7 +533,23 @@
             window.clearTimeout(this.hoverCloseTimer);
             this.hoverCloseTimer = null;
             this.renderHoverPanel(this.buildHoverSnapshot());
-            this.floatingWidget.classList.add('is-open');
+            this.setHoverPanelOpenState(true);
+        },
+
+        setHoverPanelOpenState(isOpen) {
+            if (!this.floatingWidget) {
+                return;
+            }
+
+            this.floatingWidget.classList.toggle('is-open', isOpen);
+
+            if (this.floatingButton) {
+                this.floatingButton.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+            }
+
+            if (this.floatingPanel) {
+                this.floatingPanel.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+            }
         },
 
         syncHoverPanelVisibility() {
@@ -549,7 +565,7 @@
                 return;
             }
 
-            this.floatingWidget.classList.remove('is-open');
+            this.setHoverPanelOpenState(false);
         },
 
         scheduleHoverPanelClose() {
@@ -1121,11 +1137,14 @@
                         const panel = document.createElement('div');
                         panel.id = 'job-autofill-panel';
                         panel.setAttribute('aria-live', 'polite');
+                        panel.setAttribute('aria-hidden', 'true');
 
                         const button = document.createElement('button');
                         button.id = 'job-autofill-btn';
                         button.type = 'button';
                         button.title = 'Fill job application form';
+                        button.setAttribute('aria-controls', 'job-autofill-panel');
+                        button.setAttribute('aria-expanded', 'false');
                         button.innerHTML = `
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
                     <path d="M20 6H16V4C16 2.89 15.11 2 14 2H10C8.89 2 8 2.89 8 4V6H4C2.89 6 2 6.89 2 8V19C2 20.11 2.89 21 4 21H20C21.11 21 22 20.11 22 19V8C22 6.89 21.11 6 20 6ZM10 4H14V6H10V4ZM20 19H4V8H20V19Z" fill="currentColor"/>
