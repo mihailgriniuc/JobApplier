@@ -2438,19 +2438,19 @@
 
         computeAiAnswerCacheKey(payload) {
             const normalizedPayload = {
-                question: (payload?.question || '').trim(),
-                fieldLabel: (payload?.fieldLabel || '').trim(),
-                helperText: (payload?.helperText || '').trim(),
-                sectionContext: (payload?.sectionContext || '').trim(),
-                detectedFieldType: (payload?.detectedFieldType || '').trim(),
-                preferredProfileAnswer: (payload?.preferredProfileAnswer || '').trim(),
-                fieldHtmlType: (payload?.fieldHtmlType || '').trim(),
-                pageTitle: (payload?.pageTitle || '').trim(),
-                jobPostingText: (payload?.jobPostingText || '').trim(),
-                resumeContext: (payload?.resumeContext || '').trim(),
+                question: this.coerceTextValue(payload?.question).trim(),
+                fieldLabel: this.coerceTextValue(payload?.fieldLabel).trim(),
+                helperText: this.coerceTextValue(payload?.helperText).trim(),
+                sectionContext: this.coerceTextValue(payload?.sectionContext).trim(),
+                detectedFieldType: this.coerceTextValue(payload?.detectedFieldType).trim(),
+                preferredProfileAnswer: this.coerceTextValue(payload?.preferredProfileAnswer).trim(),
+                fieldHtmlType: this.coerceTextValue(payload?.fieldHtmlType).trim(),
+                pageTitle: this.coerceTextValue(payload?.pageTitle).trim(),
+                jobPostingText: this.coerceTextValue(payload?.jobPostingText).trim(),
+                resumeContext: this.coerceTextValue(payload?.resumeContext).trim(),
                 relevantProfileContext: payload?.relevantProfileContext || {},
                 choiceOptions: Array.isArray(payload?.choiceOptions)
-                    ? payload.choiceOptions.map(option => String(option || '').trim()).filter(Boolean)
+                    ? payload.choiceOptions.map(option => this.coerceTextValue(option).trim()).filter(Boolean)
                     : [],
                 parsedResumeData: payload?.parsedResumeData || null,
                 userProfile: payload?.userProfile || {}
@@ -2471,36 +2471,46 @@
             }
 
             const sessionEntry = this.sessionAnswerCache.get(cacheKey);
-            if (sessionEntry?.answer) {
-                return {
-                    ...sessionEntry,
-                    cacheSource: 'session'
-                };
+            if (sessionEntry) {
+                const sanitizedSessionEntry = this.sanitizeAiCacheEntry(sessionEntry);
+                if (sanitizedSessionEntry) {
+                    if (sanitizedSessionEntry.answer !== sessionEntry.answer) {
+                        this.sessionAnswerCache.set(cacheKey, sanitizedSessionEntry);
+                    }
+
+                    return {
+                        ...sanitizedSessionEntry,
+                        cacheSource: 'session'
+                    };
+                }
             }
 
             const persistentEntry = this.aiAnswerCache?.[cacheKey];
-            if (persistentEntry?.answer) {
-                this.sessionAnswerCache.set(cacheKey, persistentEntry);
-                return {
-                    ...persistentEntry,
-                    cacheSource: 'persistent'
-                };
+            if (persistentEntry) {
+                const sanitizedPersistentEntry = this.sanitizeAiCacheEntry(persistentEntry);
+                if (sanitizedPersistentEntry) {
+                    this.sessionAnswerCache.set(cacheKey, sanitizedPersistentEntry);
+                    return {
+                        ...sanitizedPersistentEntry,
+                        cacheSource: 'persistent'
+                    };
+                }
             }
 
             return null;
         },
 
         async persistAiAnswer(cacheKey, payload, answer) {
-            const sanitizedAnswer = typeof answer === 'string' ? answer.trim() : '';
+            const sanitizedAnswer = this.coerceTextValue(answer).trim();
             if (!cacheKey || !sanitizedAnswer) {
                 return;
             }
 
             const entry = {
                 answer: sanitizedAnswer,
-                question: (payload?.question || '').trim(),
-                fieldLabel: (payload?.fieldLabel || '').trim(),
-                fieldHtmlType: (payload?.fieldHtmlType || '').trim(),
+                question: this.coerceTextValue(payload?.question).trim(),
+                fieldLabel: this.coerceTextValue(payload?.fieldLabel).trim(),
+                fieldHtmlType: this.coerceTextValue(payload?.fieldHtmlType).trim(),
                 updatedAt: new Date().toISOString()
             };
 
@@ -2553,7 +2563,7 @@
                 };
             }
 
-            const response = await this.sendSingleAiAnswerRequest(enrichedPayload);
+            const response = this.sanitizeAiAnswerResponse(await this.sendSingleAiAnswerRequest(enrichedPayload));
 
             if (response?.success && response.answer) {
                 await this.persistAiAnswer(cacheKey, enrichedPayload, response.answer);
@@ -2723,12 +2733,12 @@
 
                 for (let batchIndex = 0; batchIndex < batchEntries.length; batchIndex += 1) {
                     const entry = batchEntries[batchIndex];
-                    let response = hasBatchAnswers
+                    let response = this.sanitizeAiAnswerResponse(hasBatchAnswers
                         ? (batchResponse.answers[batchIndex] || { success: false, error: 'Missing batch answer' })
-                        : await this.sendSingleAiAnswerRequest(entry.enrichedPayload);
+                        : await this.sendSingleAiAnswerRequest(entry.enrichedPayload));
 
                     if (hasBatchAnswers && (!response?.success || !response.answer)) {
-                        response = await this.sendSingleAiAnswerRequest(entry.enrichedPayload);
+                        response = this.sanitizeAiAnswerResponse(await this.sendSingleAiAnswerRequest(entry.enrichedPayload));
                     }
 
                     if (response?.success && response.answer) {
@@ -3385,7 +3395,7 @@
 
             const combinedText = texts
                 .filter(Boolean)
-                .map(text => (text || '').trim())
+                .map(text => this.coerceTextValue(text).trim())
                 .join(' ');
 
             const binaryFieldType = FieldDetector.classifyBinaryQuestionType(combinedText);
@@ -6444,7 +6454,7 @@
                 ariaDescriptionText,
                 visibleQuestion,
                 placeholder
-            ].map(text => (text || '').replace(/\s+/g, ' ').trim()).filter(Boolean);
+            ].map(text => this.coerceTextValue(text).replace(/\s+/g, ' ').trim()).filter(Boolean);
 
             const question = questionCandidates.find(text => this.looksLikeQuestionPrompt(text)) || questionCandidates[0] || '';
 
@@ -6956,12 +6966,76 @@
         },
 
         normalizeText(text) {
-            return (text || '')
+            return this.coerceTextValue(text)
                 .toLowerCase()
                 .replace(/[^a-z0-9]+/g, ' ')
                 .replace(/\bu\s+s\b/g, 'us')
                 .replace(/\bu\s+s\s+a\b/g, 'usa')
                 .trim();
+        },
+
+        coerceTextValue(value, depth = 0) {
+            if (value == null || depth > 3) {
+                return '';
+            }
+
+            if (typeof value === 'string') {
+                return value;
+            }
+
+            if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+                return String(value);
+            }
+
+            if (Array.isArray(value)) {
+                return value
+                    .map(item => this.coerceTextValue(item, depth + 1))
+                    .filter(Boolean)
+                    .join(' ')
+                    .slice(0, 4000);
+            }
+
+            if (typeof value === 'object') {
+                const priorityKeys = ['answer', 'text', 'label', 'value', 'content', 'message'];
+
+                for (const key of priorityKeys) {
+                    const preferredText = this.coerceTextValue(value[key], depth + 1);
+                    if (preferredText) {
+                        return preferredText;
+                    }
+                }
+
+                return Object.values(value)
+                    .map(item => this.coerceTextValue(item, depth + 1))
+                    .filter(Boolean)
+                    .join(' ')
+                    .slice(0, 4000);
+            }
+
+            return '';
+        },
+
+        sanitizeAiCacheEntry(entry) {
+            const answer = this.coerceTextValue(entry?.answer).trim();
+            if (!answer) {
+                return null;
+            }
+
+            return {
+                ...entry,
+                answer
+            };
+        },
+
+        sanitizeAiAnswerResponse(response) {
+            if (!response || typeof response !== 'object') {
+                return response;
+            }
+
+            return {
+                ...response,
+                answer: this.coerceTextValue(response.answer).trim()
+            };
         },
 
         getAutofillConfidenceThreshold(fieldType) {
